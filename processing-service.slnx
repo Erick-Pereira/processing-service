@@ -1,5 +1,5 @@
 <Solution>
-  <Project Path="processing-service/processing-service.csproj" />
+  <Project Path="Simcag.ProcessingService.Api/Simcag.ProcessingService.Api.csproj" />
   <Project Path="Simcag.ProcessingService.Application/Simcag.ProcessingService.Application.csproj" />
   <Project Path="Simcag.ProcessingService.Domain/Simcag.ProcessingService.Domain.csproj" />
   <Project Path="Simcag.ProcessingService.Infrastructure/Simcag.ProcessingService.Infrastructure.csproj" />
