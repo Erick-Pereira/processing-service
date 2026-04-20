@@ -1,86 +1,104 @@
 using Microsoft.Extensions.Logging;
+using Simcag.IngestionService.Domain.Events;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
-using shared.Events;
-using System.Globalization;
+using Simcag.ProcessingService.Domain.Events;
+using System.Threading;
+using System.Threading.Tasks;
 
-namespace Simcag.ProcessingService.Application.Services;
-
-public class ProcessingServiceImpl : IProcessingService
+namespace Simcag.ProcessingService.Application.Services
 {
-    private readonly IProductRepository _productRepository;
-    private readonly IMessagePublisher _messagePublisher;
-    private readonly ILogger<ProcessingServiceImpl> _logger;
-
-    public ProcessingServiceImpl(
-        IProductRepository productRepository,
-        IMessagePublisher messagePublisher,
-        ILogger<ProcessingServiceImpl> logger)
+    public class ProcessingService : IProcessingService
     {
-        _productRepository = productRepository;
-        _messagePublisher = messagePublisher;
-        _logger = logger;
-    }
+        private readonly IProductRepository _productRepository;
+        private readonly IIdempotencyChecker _idempotencyChecker;
+        private readonly IEventPublisher _eventPublisher;
+        private readonly ILogger<ProcessingService> _logger;
 
-    public async Task ProcessPriceEventAsync(PriceCollectedEvent priceEvent)
-    {
-        try
+        public ProcessingService(
+            IProductRepository productRepository,
+            IIdempotencyChecker idempotencyChecker,
+            IEventPublisher eventPublisher,
+            ILogger<ProcessingService> logger)
         {
-            _logger.LogInformation("Processing price event for ProductId: {ProductId}", priceEvent.ProductId);
-
-            var normalizedName = NormalizeProductName(priceEvent.ProductName);
-
-            var product = new Product
-            {
-                Id = priceEvent.ProductId,
-                Name = priceEvent.ProductName,
-                NormalizedName = normalizedName,
-                Price = priceEvent.Price,
-                CollectionDate = priceEvent.CollectionDate,
-                Source = priceEvent.Source,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            await _productRepository.AddAsync(product);
-            await _productRepository.SaveChangesAsync();
-
-            _logger.LogInformation("Product saved to database with Id: {ProductId}", product.Id);
-
-            var processedEvent = new
-            {
-                ProductId = product.Id,
-                ProductName = product.Name,
-                NormalizedName = product.NormalizedName,
-                Price = product.Price,
-                CollectionDate = product.CollectionDate,
-                Source = product.Source,
-                ProcessedAt = DateTime.UtcNow
-            };
-
-            await _messagePublisher.PublishAsync("data.processed", processedEvent);
-
-            _logger.LogInformation("Published data.processed event for ProductId: {ProductId}", product.Id);
+            _productRepository = productRepository;
+            _idempotencyChecker = idempotencyChecker;
+            _eventPublisher = eventPublisher;
+            _logger = logger;
         }
-        catch (Exception ex)
+
+        public async Task ProcessPriceCollectedEventAsync(PriceCollectedEvent priceEvent, CancellationToken cancellationToken = default)
         {
-            _logger.LogError(ex, "Error processing price event for ProductId: {ProductId}", priceEvent.ProductId);
-            throw;
+            using var scope = _logger.BeginScope("{EventId} {ProductId}", priceEvent.EventId, priceEvent.ProductId);
+
+            if (await _idempotencyChecker.IsAlreadyProcessed(priceEvent.EventId.ToString(), cancellationToken))
+            {
+                _logger.LogInformation("Event already processed, skipping");
+                return;
+            }
+
+            _logger.LogInformation("Starting processing of price collected event");
+
+            try
+            {
+                var existingProduct = await _productRepository.GetByExternalIdAsync(priceEvent.ProductId, cancellationToken);
+
+                Product product;
+
+                if (existingProduct is null)
+                {
+                    _logger.LogInformation("Creating new product");
+                    product = Product.Create(
+                        priceEvent.ProductId,
+                        priceEvent.ProductName,
+                        priceEvent.Price,
+                        priceEvent.Source,
+                        priceEvent.Market, // Usando Market do evento
+                        priceEvent.OccurredAt); // Usando OccurredAt
+
+                    await _productRepository.AddAsync(product, cancellationToken);
+                }
+                else
+                {
+                    _logger.LogInformation("Updating existing product");
+                    existingProduct.Update(
+                        priceEvent.ProductName,
+                        priceEvent.Price,
+                        priceEvent.Source,
+                        priceEvent.Market, // Usando Market do evento
+                        priceEvent.OccurredAt); // Usando OccurredAt
+
+                    await _productRepository.UpdateAsync(existingProduct, cancellationToken);
+                    product = existingProduct;
+                }
+
+                await _idempotencyChecker.MarkAsProcessed(priceEvent.EventId.ToString(), cancellationToken);
+
+                var processedEvent = new PriceDataProcessedEvent(
+                    product.Id, // Product ID as Guid
+                    priceEvent.ProductId,
+                    priceEvent.ProductName,
+                    priceEvent.Price,
+                    priceEvent.Source,
+                    priceEvent.Market,
+                    priceEvent.OccurredAt,
+                    new
+                    {
+                        ProductId = priceEvent.ProductId,
+                        ProcessedProductId = product.Id,
+                        NormalizedName = product.NormalizedName,
+                        Price = product.Price
+                    });
+
+                await _eventPublisher.PublishAsync(processedEvent, cancellationToken);
+
+                _logger.LogInformation("Event processed successfully, ProductId: {ProductId}", product.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to process event");
+                throw;
+            }
         }
-    }
-
-    private static string NormalizeProductName(string productName)
-    {
-        if (string.IsNullOrWhiteSpace(productName))
-            return string.Empty;
-
-        // Remove extra spaces and trim
-        var normalized = string.Join(" ", productName.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
-
-        // Convert to Title Case
-        var textInfo = CultureInfo.CurrentCulture.TextInfo;
-        normalized = textInfo.ToTitleCase(normalized.ToLower());
-
-        return normalized;
     }
 }

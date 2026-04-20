@@ -8,16 +8,19 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.3" />
+    <PackageReference Include="DotNetEnv" Version="3.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.3" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.3" />
-    <PackageReference Include="RabbitMQ.Client" Version="6.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.5" />
+    <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
+    <ProjectReference Include="..\..\shared\shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Simcag.ProcessingService.Application\Simcag.ProcessingService.Application.csproj" />
     <ProjectReference Include="..\Simcag.ProcessingService.Domain\Simcag.ProcessingService.Domain.csproj" />
-    <ProjectReference Include="..\..\shared\shared.csproj" />
   </ItemGroup>
 
 </Project>

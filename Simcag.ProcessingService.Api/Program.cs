@@ -1,70 +1,72 @@
 using Microsoft.EntityFrameworkCore;
+using Simcag.IngestionService.Domain.Events;
+using Simcag.ProcessingService.Api.Workers;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.Services;
-using Simcag.ProcessingService.Infrastructure.Messaging;
 using Simcag.ProcessingService.Infrastructure.Persistence;
-using Simcag.ProcessingService.Infrastructure.Repositories;
+using Simcag.ProcessingService.Infrastructure.Persistence.Repositories;
+using Simcag.ProcessingService.Infrastructure.Services;
+using Simcag.Shared.Messaging.Configuration;
+using Simcag.Shared.Messaging.Extensions;
 
 DotNetEnv.Env.Load();
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Bind para Docker (ESSENCIAL)
-builder.WebHost.UseUrls("http://localhost:8081");
-
-// Controllers
+// Add services to the container.
 builder.Services.AddControllers();
-
-// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// EF Core with PostgreSQL
+// ✅ RabbitMQ via ENV
+var rabbitMqOptions = new RabbitMqOptions
+{
+    Host = Environment.GetEnvironmentVariable("RABBITMQ__HOST") ?? throw new InvalidOperationException("RABBITMQ__HOST not set"),
+    Port = int.Parse(Environment.GetEnvironmentVariable("RABBITMQ__PORT") ?? "5672"),
+    UserName = Environment.GetEnvironmentVariable("RABBITMQ__USERNAME") ?? throw new InvalidOperationException("RABBITMQ__USERNAME not set"),
+    Password = Environment.GetEnvironmentVariable("RABBITMQ__PASSWORD") ?? throw new InvalidOperationException("RABBITMQ__PASSWORD not set"),
+    VirtualHost = Environment.GetEnvironmentVariable("RABBITMQ__VIRTUALHOST") ?? "/"
+};
+
+// ✅ DB via ENV
+var connectionString = $"Host={Environment.GetEnvironmentVariable("DB__HOST")};" +
+                      $"Port={Environment.GetEnvironmentVariable("DB__PORT")};" +
+                      $"Database={Environment.GetEnvironmentVariable("DB__NAME")};" +
+                      $"Username={Environment.GetEnvironmentVariable("DB__USER")};" +
+                      $"Password={Environment.GetEnvironmentVariable("DB__PASSWORD")}";
+
+// Health Checks
+builder.Services.AddHealthChecks()
+    .AddNpgSql(connectionString, name: "PostgreSQL")
+    .AddRabbitMQ(rabbitMqOptions.ToConnectionString(), name: "RabbitMQ");
+
 builder.Services.AddDbContext<ProcessingDbContext>(options =>
-{
-    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-    options.UseNpgsql(connectionString);
-});
+    options.UseNpgsql(connectionString));
 
-// RabbitMQ Options
-builder.Services.Configure<RabbitMqOptions>(options =>
-{
-    options.Host = builder.Configuration["RabbitMQ:Host"];
-    options.UserName = builder.Configuration["RabbitMQ:UserName"];
-    options.Password = builder.Configuration["RabbitMQ:Password"];
-    options.Port = int.Parse(builder.Configuration["RabbitMQ:Port"]);
-});
-
-// Repositories
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
+builder.Services.AddScoped<IProcessingService, ProcessingService>();
+builder.Services.AddScoped<IIdempotencyChecker, IdempotencyChecker>();
 
-// Message Publisher
-builder.Services.AddSingleton<IMessagePublisher, MessagePublisher>();
+builder.Services.AddRabbitMqMessaging(rabbitMqOptions, "simcag-events");
+builder.Services.AddRabbitMqEventConsumer<PriceCollectedEvent>("price-events");
 
-// Processing Service
-builder.Services.AddScoped<IProcessingService, ProcessingServiceImpl>();
-
-// RabbitMQ Consumer (Background Service)
-builder.Services.AddHostedService<RabbitMqConsumer>();
-
-// Logging
-builder.Services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Information));
+// ✅ Background Service Worker
+builder.Services.AddHostedService<PriceProcessingBackgroundService>();
 
 var app = builder.Build();
 
-// Ensure database is created
-using (var scope = app.Services.CreateScope())
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<ProcessingDbContext>();
-    dbContext.Database.EnsureCreated();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
-// Swagger sempre ativo (pra debug)
-app.UseSwagger();
-app.UseSwaggerUI();
+app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();

@@ -11,19 +11,20 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.4" />
-    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.23.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.3" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.3" />
-    <PackageReference Include="RabbitMQ.Client" Version="6.5.0" />
+    <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="8.0.2" />
+    <PackageReference Include="AspNetCore.HealthChecks.Rabbitmq" Version="8.0.1" />
+    <ProjectReference Include="..\..\shared\shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Simcag.ProcessingService.Application\Simcag.ProcessingService.Application.csproj" />
     <ProjectReference Include="..\Simcag.ProcessingService.Infrastructure\Simcag.ProcessingService.Infrastructure.csproj" />
-    <ProjectReference Include="..\..\shared\shared.csproj" />
   </ItemGroup>
 
 </Project>
