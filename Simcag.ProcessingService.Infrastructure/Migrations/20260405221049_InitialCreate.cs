@@ -12,6 +12,25 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
+                name: "ProcessedEvents",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    EventId = table.Column<Guid>(type: "uuid", nullable: false),
+                    ProcessedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ProcessedEvents", x => x.Id);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ProcessedEvents_EventId",
+                table: "ProcessedEvents",
+                column: "EventId",
+                unique: true);
+
+            migrationBuilder.CreateTable(
                 name: "Products",
                 columns: table => new
                 {
@@ -43,6 +62,9 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
         {
             migrationBuilder.DropTable(
                 name: "Products");
+
+            migrationBuilder.DropTable(
+                name: "ProcessedEvents");
         }
     }
 }

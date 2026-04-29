@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Logging;
-using Simcag.IngestionService.Domain.Events;
+using Simcag.Shared.Events;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
-using Simcag.ProcessingService.Domain.Events;
 using Simcag.Shared.Messaging.Contracts;
+using PriceDataProcessedEvent = Simcag.ProcessingService.Domain.Events.PriceDataProcessedEvent;
 
 namespace Simcag.ProcessingService.Application.UseCases
 {

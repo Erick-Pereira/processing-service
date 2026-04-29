@@ -1,4 +1,5 @@
 using Simcag.Shared.Events;
+using Simcag.Shared.Messaging;
 using System;
 
 namespace Simcag.ProcessingService.Domain.Events
@@ -27,7 +28,7 @@ namespace Simcag.ProcessingService.Domain.Events
         public object EventData { get; init; }
 
         // === Override EventType ===
-        public override string EventType => "price-data-processed";
+        public override string EventType => EventNames.PriceDataProcessed;
 
         public PriceDataProcessedEvent(Guid id, string productId, string productName, decimal price, string source, string market, DateTime timestamp, object eventData)
         {

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Simcag.ProcessingService.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using Simcag.ProcessingService.Infrastructure.Persistence;
 namespace Simcag.ProcessingService.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcessingDbContext))]
-    partial class ProcessingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260428215545_AddExpenseSupplier")]
+    partial class AddExpenseSupplier
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

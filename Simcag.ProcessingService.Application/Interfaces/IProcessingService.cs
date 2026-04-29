@@ -1,4 +1,4 @@
-using Simcag.IngestionService.Domain.Events;
+using Simcag.Shared.Events;
 using System.Threading;
 using System.Threading.Tasks;
 
