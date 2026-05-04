@@ -1,80 +1,76 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
+using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Infrastructure.Persistence.Repositories;
 
 public sealed class SupplierRepository : ISupplierRepository
 {
     private readonly ProcessingDbContext _db;
+    private readonly ITenantContext _tenant;
 
-    public SupplierRepository(ProcessingDbContext db) => _db = db;
-
-    public Task<Supplier?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
-        _db.Suppliers.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id, ct);
-
-    public Task<Supplier?> GetByCnpjAsync(string cnpj, CancellationToken ct = default)
+    public SupplierRepository(ProcessingDbContext db, ITenantContext tenant)
     {
-        var digits = new string([.. (cnpj ?? string.Empty).Where(char.IsDigit)]);
-        if (digits.Length != 14) return Task.FromResult<Supplier?>(null);
-        return _db.Suppliers.FirstOrDefaultAsync(s => s.Cnpj == digits, ct);
+        _db = db;
+        _tenant = tenant;
     }
 
-    public Task<Supplier?> GetByNormalizedNameAsync(Guid? condominioId, string normalizedName, CancellationToken ct = default) =>
-        _db.Suppliers.FirstOrDefaultAsync(
-            s => s.CondominioId == condominioId && s.NormalizedName == normalizedName, ct);
+    public Task<Supplier?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
+        _db.Suppliers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(s => s.Id == id && s.TenantId == _tenant.TenantId, ct);
 
-    public async Task<IReadOnlyList<Supplier>> ListAsync(Guid condominioId, string? category, CancellationToken ct = default)
+    public Task<Supplier?> GetByDocumentAsync(string document, CancellationToken ct = default)
     {
-        var q = _db.Suppliers.AsNoTracking()
-            .Where(s => s.CondominioId == condominioId && s.IsActive);
+        var digits = new string([.. (document ?? string.Empty).Where(char.IsDigit)]);
+        if (digits.Length != 11 && digits.Length != 14) return Task.FromResult<Supplier?>(null);
+        return _db.Suppliers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(s => s.Document == digits && s.TenantId == _tenant.TenantId, ct);
+    }
+
+    public Task<Supplier?> GetByNormalizedNameAsync(string normalizedName, CancellationToken ct = default) =>
+        _db.Suppliers.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(s => s.NormalizedName == normalizedName && s.TenantId == _tenant.TenantId, ct);
+
+    public async Task<IReadOnlyList<Supplier>> ListAsync(string? category, CancellationToken ct = default)
+    {
+        var q = _db.Suppliers.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(category)) q = q.Where(s => s.Category == category);
         return await q.OrderBy(s => s.NormalizedName).ToListAsync(ct);
     }
 
-    public async Task<Supplier> UpsertByCnpjOrNameAsync(
-        Guid condominioId,
-        string rawName,
-        string? cnpj,
+    public async Task AddAsync(Supplier supplier, CancellationToken ct = default)
+    {
+        await _db.Suppliers.AddAsync(supplier, ct);
+    }
+
+    public async Task<Supplier> UpsertByDocumentOrNameAsync(
+        string name,
+        string document,
         string? category,
         CancellationToken ct = default)
     {
-        Supplier? existing = null;
-        if (!string.IsNullOrWhiteSpace(cnpj))
-            existing = await GetByCnpjAsync(cnpj!, ct);
-
+        var existing = await GetByDocumentAsync(document, ct);
         if (existing is null)
         {
-            var normalized = NormalizeForLookup(rawName);
-            existing = await GetByNormalizedNameAsync(condominioId, normalized, ct);
+            existing = await GetByNormalizedNameAsync(Supplier.NormalizeName(name), ct);
         }
 
         if (existing is not null)
         {
-            existing.Update(cnpj, rawName, category);
-            _db.Suppliers.Update(existing);
-            await _db.SaveChangesAsync(ct);
+            existing.Update(name, document, contact: null, category);
             return existing;
         }
 
-        var fresh = Supplier.Create(condominioId, rawName, cnpj, category);
+        var fresh = Supplier.Create(_tenant.TenantId, name, document, contact: null, category);
         await _db.Suppliers.AddAsync(fresh, ct);
-        await _db.SaveChangesAsync(ct);
         return fresh;
     }
 
-    private static string NormalizeForLookup(string raw)
-    {
-        var s = raw.Trim().ToUpperInvariant();
-        var sb = new System.Text.StringBuilder(s.Length);
-        foreach (var ch in s.Normalize(System.Text.NormalizationForm.FormD))
-        {
-            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch)
-                != System.Globalization.UnicodeCategory.NonSpacingMark)
-            {
-                sb.Append(ch);
-            }
-        }
-        return System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ");
-    }
+    public Task SaveChangesAsync(CancellationToken ct = default) => _db.SaveChangesAsync(ct);
 }

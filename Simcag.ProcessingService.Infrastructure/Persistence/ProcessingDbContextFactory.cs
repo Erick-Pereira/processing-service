@@ -7,7 +7,7 @@ public class ProcessingDbContextFactory : IDesignTimeDbContextFactory<Processing
 {
     public ProcessingDbContext CreateDbContext(string[] args)
     {
-        DotNetEnv.Env.Load();
+        DotNetEnv.Env.NoClobber().Load();
 
         var host = Environment.GetEnvironmentVariable("DB__HOST") ?? "localhost";
         var port = Environment.GetEnvironmentVariable("DB__PORT") ?? "5432";

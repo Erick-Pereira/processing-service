@@ -1,51 +1,71 @@
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Simcag.ProcessingService.Application.Interfaces;
-using Simcag.ProcessingService.Domain.Entities;
+using Simcag.ProcessingService.Application.UseCases.Suppliers;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
 [ApiController]
 [Route("api/suppliers")]
 [Produces("application/json")]
+[Authorize]
 public sealed class SuppliersController : ControllerBase
 {
-    private readonly ISupplierRepository _suppliers;
-
-    public SuppliersController(ISupplierRepository suppliers)
-    {
-        _suppliers = suppliers;
-    }
-
-    private Guid? ResolveCondominioId() =>
-        Request.Headers.TryGetValue("X-Tenant-Id", out var v) && Guid.TryParse(v.ToString(), out var id)
-            ? id
-            : null;
+    private readonly IMediator _mediator;
+    public SuppliersController(IMediator mediator) => _mediator = mediator;
 
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? category, CancellationToken ct = default)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
-
-        var items = await _suppliers.ListAsync(condominioId.Value, category, ct);
-        return Ok(items.Select(ToDto));
+        var items = await _mediator.Send(new ListSuppliersQuery(category), ct);
+        return Ok(items);
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
-        var s = await _suppliers.GetByIdAsync(id, ct);
-        return s is null ? NotFound() : Ok(ToDto(s));
+        var supplier = await _mediator.Send(new GetSupplierByIdQuery(id), ct);
+        return Ok(supplier);
     }
 
-    private static object ToDto(Supplier s) => new
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateSupplierCommand cmd, CancellationToken ct)
     {
-        id = s.Id,
-        condominioId = s.CondominioId,
-        cnpj = s.Cnpj,
-        normalizedName = s.NormalizedName,
-        category = s.Category,
-        isActive = s.IsActive,
-        createdAt = s.CreatedAt
-    };
+        var id = await _mediator.Send(cmd, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSupplierBody body, CancellationToken ct)
+    {
+        await _mediator.Send(new UpdateSupplierCommand(
+            id, body.Name, body.Document, body.Email, body.Phone, body.Address, body.Category), ct);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
+    {
+        await _mediator.Send(new DeactivateSupplierCommand(id), ct);
+        return NoContent();
+    }
+
+    /// <summary>Reatribui despesas do fornecedor origem ao destino e desativa a origem (consolidação / merge).</summary>
+    [HttpPost("merge")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Merge([FromBody] MergeSuppliersBody body, CancellationToken ct)
+    {
+        await _mediator.Send(new MergeSuppliersCommand(body.SourceSupplierId, body.TargetSupplierId), ct);
+        return NoContent();
+    }
 }
+
+public sealed record UpdateSupplierBody(
+    string Name,
+    string Document,
+    string? Email,
+    string? Phone,
+    string? Address,
+    string? Category);
+
+public sealed record MergeSuppliersBody(Guid SourceSupplierId, Guid TargetSupplierId);

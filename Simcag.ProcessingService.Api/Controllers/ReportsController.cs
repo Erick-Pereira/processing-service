@@ -1,27 +1,27 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using QuestPDF.Fluent;
 using Simcag.ProcessingService.Api.Reports;
 using Simcag.ProcessingService.Application.Interfaces;
+using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
 [ApiController]
 [Route("api/reports")]
+[Authorize]
 public sealed class ReportsController : ControllerBase
 {
     private readonly IExpenseRepository _expenses;
     private readonly ISupplierRepository _suppliers;
+    private readonly ITenantContext _tenant;
 
-    public ReportsController(IExpenseRepository expenses, ISupplierRepository suppliers)
+    public ReportsController(IExpenseRepository expenses, ISupplierRepository suppliers, ITenantContext tenant)
     {
         _expenses = expenses;
         _suppliers = suppliers;
+        _tenant = tenant;
     }
-
-    private Guid? ResolveCondominioId() =>
-        Request.Headers.TryGetValue("X-Tenant-Id", out var v) && Guid.TryParse(v.ToString(), out var id)
-            ? id
-            : null;
 
     [HttpGet("monthly")]
     public Task<IActionResult> Monthly([FromQuery] int? year, [FromQuery] int? month, CancellationToken ct)
@@ -58,16 +58,15 @@ public sealed class ReportsController : ControllerBase
 
     private async Task<IActionResult> GenerateAsync(string label, DateTime from, DateTime to, CancellationToken ct)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
-
-        var expenses = await _expenses.ListAsync(condominioId.Value, from, to, null, null, 0, 1000, ct);
-        var totalAmount = await _expenses.SumAmountAsync(condominioId.Value, from, to, null, ct);
-        var count = await _expenses.CountAsync(condominioId.Value, from, to, null, null, ct);
-        var suppliers = await _suppliers.ListAsync(condominioId.Value, null, ct);
+        var (expenses, count) = await _expenses.ListAsync(
+            status: null, category: null, supplierId: null,
+            from: from, to: to, skip: 0, take: 1000, includePayments: true, ct);
+        var totalAmount = expenses.Sum(e => e.TotalAmount);
+        var totalPaid = expenses.Sum(e => e.TotalPaid);
+        var suppliers = await _suppliers.ListAsync(category: null, ct);
 
         var data = new ExpenseReportDocument.ReportData(
-            condominioId.Value, label, from, to, totalAmount, count, suppliers.Count, expenses);
+            _tenant.TenantId, label, from, to, totalAmount, totalPaid, count, suppliers.Count, expenses);
         var doc = new ExpenseReportDocument(data);
         var bytes = doc.GeneratePdf();
 

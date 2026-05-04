@@ -1,30 +1,32 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Simcag.ProcessingService.Domain.Entities;
 
 namespace Simcag.ProcessingService.Application.Interfaces;
 
-/// <summary>
-/// Repositório canônico v1 para a entidade <see cref="Supplier"/>.
-/// </summary>
 public interface ISupplierRepository
 {
     Task<Supplier?> GetByIdAsync(Guid id, CancellationToken ct = default);
 
-    Task<Supplier?> GetByCnpjAsync(string cnpj, CancellationToken ct = default);
+    Task<Supplier?> GetByDocumentAsync(string document, CancellationToken ct = default);
 
-    Task<Supplier?> GetByNormalizedNameAsync(Guid? condominioId, string normalizedName, CancellationToken ct = default);
+    Task<Supplier?> GetByNormalizedNameAsync(string normalizedName, CancellationToken ct = default);
 
-    Task<IReadOnlyList<Supplier>> ListAsync(Guid condominioId, string? category, CancellationToken ct = default);
+    Task<IReadOnlyList<Supplier>> ListAsync(string? category, CancellationToken ct = default);
+
+    Task AddAsync(Supplier supplier, CancellationToken ct = default);
 
     /// <summary>
-    /// Cria ou atualiza um Supplier com base em CNPJ (preferencial) ou NormalizedName + CondominioId.
+    /// Cria ou atualiza um Supplier com base em Documento (preferencial) ou NormalizedName,
+    /// dentro do escopo do tenant atual (resolvido via <c>ITenantContext</c>).
     /// </summary>
-    Task<Supplier> UpsertByCnpjOrNameAsync(
-        Guid condominioId,
-        string rawName,
-        string? cnpj,
+    Task<Supplier> UpsertByDocumentOrNameAsync(
+        string name,
+        string document,
         string? category,
         CancellationToken ct = default);
+
+    Task SaveChangesAsync(CancellationToken ct = default);
 }

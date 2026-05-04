@@ -1,51 +1,70 @@
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Simcag.ProcessingService.Application.Interfaces;
+using Simcag.ProcessingService.Application.UseCases.Dashboards;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
 [ApiController]
 [Route("api/dashboard")]
 [Produces("application/json")]
+[Authorize]
 public sealed class DashboardController : ControllerBase
 {
-    private readonly IExpenseRepository _expenses;
-    private readonly ISupplierRepository _suppliers;
+    private readonly IMediator _mediator;
+    public DashboardController(IMediator mediator) => _mediator = mediator;
 
-    public DashboardController(IExpenseRepository expenses, ISupplierRepository suppliers)
+    [HttpGet("monthly")]
+    public async Task<IActionResult> Monthly([FromQuery] int? year, CancellationToken ct)
     {
-        _expenses = expenses;
-        _suppliers = suppliers;
+        var y = year ?? DateTime.UtcNow.Year;
+        var rows = await _mediator.Send(new GetMonthlyDashboardQuery(y), ct);
+        return Ok(new { year = y, rows });
     }
 
-    private Guid? ResolveCondominioId() =>
-        Request.Headers.TryGetValue("X-Tenant-Id", out var v) && Guid.TryParse(v.ToString(), out var id)
-            ? id
-            : null;
+    [HttpGet("categories")]
+    public async Task<IActionResult> Categories([FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+    {
+        var f = from ?? DateTime.UtcNow.AddMonths(-12);
+        var t = to ?? DateTime.UtcNow;
+        var rows = await _mediator.Send(new GetCategoryBreakdownQuery(f, t), ct);
+        return Ok(new { from = f, to = t, rows });
+    }
 
-    [HttpGet("summary")]
-    public async Task<IActionResult> Summary(
-        [FromQuery] DateTime? from,
-        [FromQuery] DateTime? to,
+    [HttpGet("cash-flow")]
+    public async Task<IActionResult> CashFlow([FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+    {
+        var f = from ?? DateTime.UtcNow.AddMonths(-6);
+        var t = to ?? DateTime.UtcNow.AddMonths(3);
+        var rows = await _mediator.Send(new GetCashFlowQuery(f, t), ct);
+        return Ok(new { from = f, to = t, rows });
+    }
+
+    [HttpGet("suppliers")]
+    public async Task<IActionResult> Suppliers(
+        [FromQuery] int top = 10,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
+        var f = from ?? DateTime.UtcNow.AddMonths(-12);
+        var t = to ?? DateTime.UtcNow;
+        var rows = await _mediator.Send(new GetSupplierRankingQuery(f, t, top), ct);
+        return Ok(new { top, from = f, to = t, rows });
+    }
 
-        var fromDate = from ?? DateTime.UtcNow.AddMonths(-1);
-        var toDate = to ?? DateTime.UtcNow;
+    [HttpGet("year-over-year")]
+    public async Task<IActionResult> YearOverYear([FromQuery] int yearsBack = 2, CancellationToken ct = default)
+    {
+        var rows = await _mediator.Send(new GetYearOverYearQuery(yearsBack), ct);
+        return Ok(new { yearsBack, rows });
+    }
 
-        var totalAmount = await _expenses.SumAmountAsync(condominioId.Value, fromDate, toDate, null, ct);
-        var totalExpenses = await _expenses.CountAsync(condominioId.Value, fromDate, toDate, null, null, ct);
-        var suppliers = await _suppliers.ListAsync(condominioId.Value, null, ct);
-
-        return Ok(new
-        {
-            condominioId = condominioId.Value,
-            period = new { from = fromDate, to = toDate },
-            totalAmount,
-            totalExpenses,
-            suppliersCount = suppliers.Count,
-            averageExpense = totalExpenses == 0 ? 0 : totalAmount / totalExpenses
-        });
+    [HttpPost("/api/admin/refresh-dashboard")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Refresh(CancellationToken ct)
+    {
+        await _mediator.Send(new RefreshDashboardCommand(), ct);
+        return Ok(new { refreshed = true, at = DateTime.UtcNow });
     }
 }

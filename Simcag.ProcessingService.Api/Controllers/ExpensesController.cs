@@ -1,96 +1,83 @@
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Simcag.ProcessingService.Application.Interfaces;
-using Simcag.ProcessingService.Domain.Entities;
+using Simcag.ProcessingService.Application.UseCases.Expenses;
+using Simcag.ProcessingService.Application.UseCases.Payments;
+using Simcag.ProcessingService.Domain.Enums;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
 [ApiController]
 [Route("api/expenses")]
 [Produces("application/json")]
+[Authorize]
 public sealed class ExpensesController : ControllerBase
 {
-    private readonly IExpenseRepository _expenses;
-    private readonly ILogger<ExpensesController> _logger;
-
-    public ExpensesController(IExpenseRepository expenses, ILogger<ExpensesController> logger)
-    {
-        _expenses = expenses;
-        _logger = logger;
-    }
-
-    private Guid? ResolveCondominioId() =>
-        Request.Headers.TryGetValue("X-Tenant-Id", out var v) && Guid.TryParse(v.ToString(), out var id)
-            ? id
-            : null;
+    private readonly IMediator _mediator;
+    public ExpensesController(IMediator mediator) => _mediator = mediator;
 
     [HttpGet]
     public async Task<IActionResult> List(
-        [FromQuery] DateTime? from,
-        [FromQuery] DateTime? to,
+        [FromQuery] ExpenseStatus? status,
         [FromQuery] string? category,
         [FromQuery] Guid? supplierId,
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         CancellationToken ct = default)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
-
-        page = Math.Max(1, page);
-        pageSize = Math.Clamp(pageSize, 1, 200);
-        var skip = (page - 1) * pageSize;
-
-        var items = await _expenses.ListAsync(condominioId.Value, from, to, category, supplierId, skip, pageSize, ct);
-        var total = await _expenses.CountAsync(condominioId.Value, from, to, category, supplierId, ct);
-
-        return Ok(new
-        {
-            page,
-            pageSize,
-            total,
-            items = items.Select(ToDto)
-        });
+        var result = await _mediator.Send(
+            new ListExpensesQuery(status, category, supplierId, from, to, page, pageSize), ct);
+        return Ok(result);
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
-
-        var expense = await _expenses.GetByIdAsync(id, condominioId.Value, ct);
-        return expense is null ? NotFound() : Ok(ToDto(expense));
+        var result = await _mediator.Send(new GetExpenseByIdQuery(id), ct);
+        return Ok(result);
     }
 
-    [HttpGet("summary")]
-    public async Task<IActionResult> Summary(
-        [FromQuery] DateTime? from,
-        [FromQuery] DateTime? to,
-        [FromQuery] string? category,
-        CancellationToken ct = default)
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateExpenseCommand cmd, CancellationToken ct)
     {
-        var condominioId = ResolveCondominioId();
-        if (condominioId is null) return BadRequest(new { error = "X-Tenant-Id header obrigatório" });
-
-        var total = await _expenses.SumAmountAsync(condominioId.Value, from, to, category, ct);
-        var count = await _expenses.CountAsync(condominioId.Value, from, to, category, null, ct);
-
-        return Ok(new { total, count, average = count == 0 ? 0 : total / count });
+        var id = await _mediator.Send(cmd, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
     }
 
-    private static object ToDto(Expense e) => new
+    [HttpPut("{id:guid}/approve")]
+    public async Task<IActionResult> Approve(Guid id, CancellationToken ct)
     {
-        id = e.Id,
-        condominioId = e.CondominioId,
-        rawDocumentId = e.RawDocumentId,
-        supplierId = e.SupplierId,
-        category = e.Category,
-        amount = e.Amount,
-        currency = e.Currency,
-        date = e.Date,
-        region = e.Region,
-        confidenceScore = e.ConfidenceScore,
-        lowConfidence = e.LowConfidence,
-        createdAt = e.CreatedAt
-    };
+        await _mediator.Send(new ApproveExpenseCommand(id), ct);
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/cancel")]
+    public async Task<IActionResult> Cancel(Guid id, [FromBody] CancelExpenseRequest body, CancellationToken ct)
+    {
+        await _mediator.Send(new CancelExpenseCommand(id, body.Reason), ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/payments")]
+    public async Task<IActionResult> RegisterPayment(Guid id, [FromBody] RegisterPaymentBody body, CancellationToken ct)
+    {
+        var paymentId = await _mediator.Send(
+            new RegisterPaymentCommand(id, body.Amount, body.PaymentDate, body.Method, body.ReferenceCode), ct);
+        return Ok(new { paymentId });
+    }
+
+    [HttpPost("{id:guid}/payments/{paymentId:guid}/refund")]
+    public async Task<IActionResult> RefundPayment(Guid id, Guid paymentId, [FromBody] RefundPaymentBody body, CancellationToken ct)
+    {
+        await _mediator.Send(new RefundPaymentCommand(id, paymentId, body.Reason), ct);
+        return NoContent();
+    }
 }
+
+public sealed record CancelExpenseRequest(string Reason);
+
+public sealed record RegisterPaymentBody(decimal Amount, DateTime PaymentDate, PaymentMethod Method, string? ReferenceCode);
+
+public sealed record RefundPaymentBody(string Reason);

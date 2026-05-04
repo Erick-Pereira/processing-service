@@ -1,45 +1,40 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Simcag.ProcessingService.Domain.Entities;
+using Simcag.ProcessingService.Domain.Enums;
 
 namespace Simcag.ProcessingService.Application.Interfaces;
 
 /// <summary>
-/// Repositório canônico v1 para a entidade <see cref="Expense"/>.
+/// Repositório de write-side para o agregado <see cref="Expense"/>.
+/// Reads de dashboard são responsabilidade do <c>IDashboardQueryRepository</c> (Dapper).
 /// </summary>
 public interface IExpenseRepository
 {
-    Task<Expense?> GetByIdAsync(Guid id, Guid condominioId, CancellationToken ct = default);
+    /// <summary>Carrega Expense incluindo Items e Payments — usado pelos handlers que vão mutar o agregado.</summary>
+    Task<Expense?> GetByIdWithChildrenAsync(Guid id, CancellationToken ct = default);
+
+    Task<Expense?> GetByIdAsync(Guid id, CancellationToken ct = default);
 
     Task<Expense?> GetByRawDocumentIdAsync(Guid rawDocumentId, CancellationToken ct = default);
 
-    Task<IReadOnlyList<Expense>> ListAsync(
-        Guid condominioId,
-        DateTime? from,
-        DateTime? to,
+    Task<(IReadOnlyList<Expense> Items, int Total)> ListAsync(
+        ExpenseStatus? status,
         string? category,
         Guid? supplierId,
+        DateTime? from,
+        DateTime? to,
         int skip,
         int take,
+        bool includePayments = false,
         CancellationToken ct = default);
 
-    Task<int> CountAsync(
-        Guid condominioId,
-        DateTime? from,
-        DateTime? to,
-        string? category,
-        Guid? supplierId,
-        CancellationToken ct = default);
-
-    Task<decimal> SumAmountAsync(
-        Guid condominioId,
-        DateTime? from,
-        DateTime? to,
-        string? category,
-        CancellationToken ct = default);
+    /// <summary>Atualiza SupplierId em todas as despesas do tenant atual que apontam para <paramref name="fromSupplierId"/>.</summary>
+    Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, CancellationToken ct = default);
 
     Task AddAsync(Expense expense, CancellationToken ct = default);
 
-    Task UpdateAsync(Expense expense, CancellationToken ct = default);
+    Task SaveChangesAsync(CancellationToken ct = default);
 }
