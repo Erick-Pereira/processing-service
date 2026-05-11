@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediatR;
@@ -135,15 +137,26 @@ public sealed class DataIngestedConsumer : BackgroundService
         }
 
         var mediator = sp.GetRequiredService<IMediator>();
+        var lines = ResolveIngestedLines(evt);
+        _log.LogInformation(
+            "DataIngestedEvent {EventId}: linhas para despesa = {LineCount} (ExtractedFields.Lines={Direct}, fallback Extra={FromExtra}).",
+            evt.EventId,
+            lines?.Count ?? 0,
+            evt.ExtractedFields?.Lines?.Count ?? 0,
+            lines is not null && (evt.ExtractedFields?.Lines is null or { Count: 0 }));
+
+        var ef = evt.ExtractedFields;
         var result = await mediator.Send(new IngestExpenseFromDocumentCommand(
             RawDocumentId: evt.DocumentId,
             DocumentType: evt.DocumentType,
-            Description: evt.ExtractedFields.Description,
-            Amount: evt.ExtractedFields.Amount,
-            IssueDate: evt.ExtractedFields.Date,
-            SupplierName: evt.ExtractedFields.SupplierName,
-            SupplierTaxId: evt.ExtractedFields.SupplierTaxId,
-            FallbackCategory: "Outros"), ct);
+            Description: ef?.Description,
+            Amount: ef?.Amount,
+            IssueDate: ef?.Date,
+            SupplierName: ef?.SupplierName,
+            SupplierTaxId: ef?.SupplierTaxId,
+            FallbackCategory: "Outros",
+            Lines: lines,
+            RawText: evt.RawText), ct);
 
         await idem.MarkAsProcessed(evt.EventId.ToString(), ct);
 
@@ -152,6 +165,49 @@ public sealed class DataIngestedConsumer : BackgroundService
             evt.EventId, result.ExpenseId, result.AlreadyIngested);
 
         return result.AlreadyIngested ? ProcessOutcome.AlreadyProcessed : ProcessOutcome.Ok;
+    }
+
+    private static readonly JsonSerializerOptions LinesJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    /// <summary>
+    /// Preferir <see cref="ExtractedFields.Lines"/>; se vier vazio após JSON (mensagens antigas / serialização),
+    /// reidratar a partir de <c>Extra["ingestedLinesJson"]</c> preenchido na ingestão.
+    /// </summary>
+    private static IReadOnlyList<IngestedExpenseLine>? ResolveIngestedLines(DataIngestedEvent evt)
+    {
+        if (evt.ExtractedFields?.Lines is { Count: > 0 } direct)
+            return direct;
+
+        return TryDeserializeLinesFromExtra(evt.ExtractedFields?.Extra);
+    }
+
+    private static List<IngestedExpenseLine>? TryDeserializeLinesFromExtra(Dictionary<string, object?>? extra)
+    {
+        if (extra is null || !extra.TryGetValue("ingestedLinesJson", out var raw) || raw is null)
+            return null;
+
+        var json = raw switch
+        {
+            string s => s,
+            JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString(),
+            JsonElement je when je.ValueKind == JsonValueKind.Array => je.GetRawText(),
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<IngestedExpenseLine>>(json, LinesJsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool IsValid(DataIngestedEvent evt)

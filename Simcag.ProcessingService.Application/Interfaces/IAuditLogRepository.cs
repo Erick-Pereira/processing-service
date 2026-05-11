@@ -8,6 +8,9 @@ namespace Simcag.ProcessingService.Application.Interfaces;
 
 public interface IAuditLogRepository
 {
+    /// <summary>Insere um registro de auditoria explícito (ex.: eventos assíncronos) e persiste.</summary>
+    Task AppendAsync(AuditLog log, CancellationToken ct = default);
+
     Task<(IReadOnlyList<AuditLog> Items, int Total)> ListAsync(
         string? entityName,
         Guid? entityId,

@@ -2,6 +2,8 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using MediatR;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simcag.ProcessingService.Api.Middleware;
@@ -73,7 +75,8 @@ var rabbitMqHealthUri = $"amqp://{Uri.EscapeDataString(rabbitMqOptions.UserName)
 
 builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString, name: "PostgreSQL")
-    .AddRabbitMQ(rabbitMqHealthUri, name: "RabbitMQ");
+    .AddRabbitMQ(rabbitMqHealthUri, name: "RabbitMQ")
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
 
 // ===== AUDITING + MULTI-TENANCY =====
 builder.Services.AddHttpContextAccessor();
@@ -91,6 +94,7 @@ builder.Services.AddDbContext<ProcessingDbContext>((sp, options) =>
 
 // Repos write-side
 builder.Services.AddScoped<IExpenseRepository, ExpenseRepository>();
+builder.Services.AddScoped<IProductRepository, ProductRepository>();
 builder.Services.AddScoped<ISupplierRepository, SupplierRepository>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
@@ -115,6 +119,9 @@ var eventsExchange = EventBusConstants.GetEventsExchangeName();
 // === Canônico v1: ingestion → processing ===
 builder.Services.AddRabbitMqEventConsumer<DataIngestedEvent>(EventBusConstants.QueueDataIngested, eventsExchange);
 
+// === price-analysis → processing (auditoria correlacionada ao documento) ===
+builder.Services.AddRabbitMqEventConsumer<PriceAnalyzedEvent>(EventBusConstants.QueuePriceAnalyzed, eventsExchange);
+
 // ===== AUTHN/AUTHZ confiando nos headers do gateway =====
 builder.Services
     .AddAuthentication(GatewayAuthenticationHandler.SchemeName)
@@ -123,6 +130,7 @@ builder.Services.AddAuthorization();
 
 // Background workers
 builder.Services.AddHostedService<DataIngestedConsumer>();
+builder.Services.AddHostedService<PriceAnalyzedConsumer>();
 builder.Services.AddHostedService<DashboardRefreshWorker>();
 
 var app = builder.Build();
@@ -182,5 +190,9 @@ app.Use(async (ctx, next) =>
 
 app.MapControllers();
 app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags?.Contains("live") == true,
+});
 
 app.Run();

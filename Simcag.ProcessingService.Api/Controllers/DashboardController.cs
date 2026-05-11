@@ -14,6 +14,40 @@ public sealed class DashboardController : ControllerBase
     private readonly IMediator _mediator;
     public DashboardController(IMediator mediator) => _mediator = mediator;
 
+    /// <summary>Aggregated KPIs for the SPA dashboard (tenant-scoped read model).</summary>
+    [HttpGet("summary")]
+    public async Task<IActionResult> Summary([FromQuery] int? year, CancellationToken ct)
+    {
+        var y = year ?? DateTime.UtcNow.Year;
+        var rows = await _mediator.Send(new GetMonthlyDashboardQuery(y), ct);
+        var totalAmount = rows.Sum(r => r.TotalAmount);
+        var totalExpenseLines = rows.Sum(r => r.ExpenseCount);
+        var supplierIds = new HashSet<Guid>(rows.Select(r => r.SupplierId).Where(id => id != Guid.Empty));
+        var outstanding = rows.Sum(r => r.Outstanding);
+
+        // Heuristic "status" bars for UI (0–100); refine when domain rules exist.
+        var supplierScore = supplierIds.Count == 0 ? 0 : Math.Min(100, supplierIds.Count * 8);
+        var docScore = totalExpenseLines == 0 ? 0 : Math.Min(100, 50 + totalExpenseLines);
+        var confScore = totalAmount <= 0
+            ? 60
+            : (int)Math.Clamp(100.0 - (double)(outstanding / totalAmount * 30m), 0, 100);
+
+        return Ok(new
+        {
+            year = y,
+            economiaIdentificada = outstanding > 0 ? outstanding : totalAmount,
+            auditoriasRealizadas = totalExpenseLines,
+            fornecedoresCadastrados = supplierIds.Count,
+            alertasAtivos = 0,
+            statusGeral = new
+            {
+                conformidades = $"{confScore}%",
+                documentacao = $"{docScore}%",
+                fornecedoresValidados = $"{supplierScore}%"
+            }
+        });
+    }
+
     [HttpGet("monthly")]
     public async Task<IActionResult> Monthly([FromQuery] int? year, CancellationToken ct)
     {

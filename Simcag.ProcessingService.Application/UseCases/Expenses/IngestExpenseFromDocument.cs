@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
@@ -7,6 +9,7 @@ using MediatR;
 using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
+using Simcag.Shared.Events;
 using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Application.UseCases.Expenses;
@@ -27,7 +30,9 @@ public sealed record IngestExpenseFromDocumentCommand(
     DateTime? IssueDate,
     string? SupplierName,
     string? SupplierTaxId,
-    string? FallbackCategory = "Outros") : IRequest<IngestExpenseFromDocumentResult>;
+    string? FallbackCategory = "Outros",
+    IReadOnlyList<IngestedExpenseLine>? Lines = null,
+    string? RawText = null) : IRequest<IngestExpenseFromDocumentResult>;
 
 public sealed record IngestExpenseFromDocumentResult(Guid ExpenseId, bool AlreadyIngested);
 
@@ -76,12 +81,34 @@ public sealed class IngestExpenseFromDocumentHandler
             return new IngestExpenseFromDocumentResult(existing.Id, AlreadyIngested: true);
         }
 
+        // Ingestão por vezes envia só o cabeçalho sintético ("BALANCE_SHEET — 9 itens") como única linha,
+        // ou Lines perde-se na mensagem mas Description mantém-se — nestes casos Lines não está "vazio"
+        // e o fallback RawText tinha de ser ignorado. Unifica com deteção desse agregado.
+        IReadOnlyList<IngestedExpenseLine>? linesForIngest = request.Lines;
+        var fromRaw = BalanceteRawTextLineExtractor.TryExtractLines(request.RawText, request.DocumentType);
+        if (fromRaw is { Count: > 0 } extracted)
+        {
+            var n = linesForIngest?.Count ?? 0;
+            var useExtracted =
+                n == 0
+                || (n == 1
+                    && LooksLikeIngestionSyntheticMultiItemSummary(linesForIngest![0].Description, request.Description)
+                    && extracted.Count >= 2);
+
+            if (useExtracted)
+            {
+                _log.LogWarning(
+                    "Expense ingest {DocumentId}: usando {ExtractedCount} linhas do RawText (evento tinha {PreviousCount} linha(s); balancete/relatório compacto).",
+                    request.RawDocumentId, extracted.Count, n);
+                linesForIngest = extracted;
+            }
+        }
+
         var supplier = await ResolveOrCreateSupplierAsync(request, ct);
         var (description, category) = NormalizeDescriptionAndCategory(request);
-        var amount = request.Amount ?? 0m;
         var issueDate = request.IssueDate ?? DateTime.UtcNow.Date;
 
-        var confidence = ComputeConfidence(request);
+        var confidence = ComputeConfidence(request, linesForIngest);
 
         var expense = Expense.Create(
             tenantId: _tenant.TenantId,
@@ -94,10 +121,29 @@ public sealed class IngestExpenseFromDocumentHandler
             rawDocumentId: request.RawDocumentId,
             confidenceScore: confidence);
 
+        var structuredLines = NormalizeStructuredLines(linesForIngest);
+        var fallbackAmount = request.Amount ?? 0m;
+
         // Sempre cria pelo menos 1 ExpenseItem (invariante: aprovação requer items).
-        // Quando o valor é 0 (extração falhou), o item fica com unitPrice=0 e a despesa
-        // entra no fluxo de revisão manual sinalizada por LowConfidence=true.
-        expense.AddItem(description, quantity: 1m, unitPrice: amount);
+        if (structuredLines.Count > 0)
+        {
+            var sumLines = structuredLines.Sum(l => l.UnitPrice);
+            if (sumLines <= 0m && fallbackAmount > 0m)
+            {
+                expense.AddItem(description, quantity: 1m, unitPrice: fallbackAmount);
+            }
+            else
+            {
+                foreach (var line in structuredLines)
+                    expense.AddItem(line.Description, quantity: 1m, unitPrice: line.UnitPrice);
+            }
+        }
+        else
+        {
+            expense.AddItem(description, quantity: 1m, unitPrice: fallbackAmount);
+        }
+
+        var amount = expense.TotalAmount;
 
         await _expenses.AddAsync(expense, ct);
         await _expenses.SaveChangesAsync(ct);
@@ -135,6 +181,8 @@ public sealed class IngestExpenseFromDocumentHandler
         var description = string.IsNullOrWhiteSpace(req.Description)
             ? $"{req.DocumentType} ingerido em {DateTime.UtcNow:yyyy-MM-dd}"
             : req.Description.Trim();
+        if (description.Length > 500)
+            description = description[..500];
 
         var category = string.IsNullOrWhiteSpace(req.FallbackCategory) ? "Outros" : req.FallbackCategory!;
         return (description, category);
@@ -145,15 +193,48 @@ public sealed class IngestExpenseFromDocumentHandler
     /// nada extraído ⇒ 0. Usado para o flag <c>LowConfidence</c> do agregado e para priorizar
     /// revisão manual no dashboard.
     /// </summary>
-    private static decimal ComputeConfidence(IngestExpenseFromDocumentCommand req)
+    private static decimal ComputeConfidence(IngestExpenseFromDocumentCommand req, IReadOnlyList<IngestedExpenseLine>? linesOverride = null)
     {
         var score = 0m;
-        if (req.Amount.HasValue && req.Amount.Value > 0m) score += 0.40m;
-        if (req.IssueDate.HasValue) score += 0.20m;
-        if (!string.IsNullOrWhiteSpace(req.SupplierTaxId)) score += 0.20m;
-        if (!string.IsNullOrWhiteSpace(req.SupplierName)) score += 0.10m;
-        if (!string.IsNullOrWhiteSpace(req.Description)) score += 0.10m;
-        return Math.Round(score, 3);
+        var lines = (linesOverride ?? req.Lines)?.Where(l => !string.IsNullOrWhiteSpace(l.Description)).ToList();
+        if (lines is { Count: > 0 })
+        {
+            score += 0.25m;
+            if (lines.Any(l => l.Amount > 0m)) score += 0.35m;
+        }
+        else if (req.Amount.HasValue && req.Amount.Value > 0m)
+        {
+            score += 0.40m;
+        }
+
+        if (req.IssueDate.HasValue) score += 0.15m;
+        if (!string.IsNullOrWhiteSpace(req.SupplierTaxId)) score += 0.15m;
+        if (!string.IsNullOrWhiteSpace(req.SupplierName)) score += 0.08m;
+        if (!string.IsNullOrWhiteSpace(req.Description)) score += 0.07m;
+        return Math.Round(Math.Min(score, 1m), 3);
+    }
+
+    private const int MaxItemDescriptionLength = 500;
+
+    private static List<(string Description, decimal UnitPrice)> NormalizeStructuredLines(
+        IReadOnlyList<IngestedExpenseLine>? lines)
+    {
+        if (lines is null || lines.Count == 0)
+            return [];
+
+        var list = new List<(string Description, decimal UnitPrice)>();
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line.Description))
+                continue;
+            var desc = line.Description.Trim();
+            if (desc.Length > MaxItemDescriptionLength)
+                desc = desc[..MaxItemDescriptionLength];
+            var price = line.Amount < 0m ? 0m : line.Amount;
+            list.Add((desc, price));
+        }
+
+        return list;
     }
 
     private static string? NormalizeTaxId(string? raw)
@@ -161,5 +242,30 @@ public sealed class IngestExpenseFromDocumentHandler
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var digits = new string([.. raw.Where(char.IsDigit)]);
         return digits.Length is 11 or 14 ? digits : null;
+    }
+
+    /// <summary>
+    /// Cabeçalho gerado em PublishRawEventUseCase quando há várias linhas com valor:
+    /// <c>{tipo} — N itens</c>. Se só isto chega como única linha, há de se reextrair do RawText.
+    /// </summary>
+    private static readonly Regex SyntheticMultiItemSummaryRx = new(
+        @"[\u2014\u2013\-]\s*\d+\s+itens\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static bool LooksLikeIngestionSyntheticMultiItemSummary(string? lineDescription, string? headerDescription)
+    {
+        if (!string.IsNullOrWhiteSpace(lineDescription)
+            && SyntheticMultiItemSummaryRx.IsMatch(lineDescription.Trim()))
+            return true;
+
+        var h = headerDescription?.Trim();
+        var l = lineDescription?.Trim();
+        if (string.IsNullOrEmpty(h) || string.IsNullOrEmpty(l))
+            return false;
+
+        if (!string.Equals(l, h, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return SyntheticMultiItemSummaryRx.IsMatch(h);
     }
 }

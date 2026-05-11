@@ -15,6 +15,12 @@ public sealed class AuditLogRepository : IAuditLogRepository
 
     public AuditLogRepository(ProcessingDbContext db) => _db = db;
 
+    public async Task AppendAsync(AuditLog log, CancellationToken ct = default)
+    {
+        await _db.AuditLogs.AddAsync(log, ct);
+        await _db.SaveChangesAsync(ct);
+    }
+
     public async Task<(IReadOnlyList<AuditLog> Items, int Total)> ListAsync(
         string? entityName,
         Guid? entityId,

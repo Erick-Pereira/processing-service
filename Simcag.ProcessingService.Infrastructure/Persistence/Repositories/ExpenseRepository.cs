@@ -26,8 +26,7 @@ public sealed class ExpenseRepository : IExpenseRepository
             .FirstOrDefaultAsync(e => e.Id == id, ct);
 
     public Task<Expense?> GetByRawDocumentIdAsync(Guid rawDocumentId, CancellationToken ct = default) =>
-        _db.Expenses.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(e => e.RawDocumentId == rawDocumentId, ct);
+        _db.Expenses.FirstOrDefaultAsync(e => e.RawDocumentId == rawDocumentId, ct);
 
     public async Task<(IReadOnlyList<Expense> Items, int Total)> ListAsync(
         ExpenseStatus? status,
