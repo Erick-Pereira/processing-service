@@ -28,10 +28,27 @@ public sealed class ProductRepository : IProductRepository
         if (price <= 0m)
             throw new ArgumentOutOfRangeException(nameof(price), "Preço deve ser maior que zero.");
 
+        var collected = DateTime.UtcNow;
+        var normalized = Product.ComputeNormalizedName(displayName);
+
+        // Mesmo produto lógico em documentos diferentes vinha com ExternalId distinto (docGuid:linha) → duplicatas.
+        // Para fonte "price-analysis", funde por nome normalizado + fonte (mantém o primeiro ExternalId).
+        if (normalized.Length > 0
+            && string.Equals(src, "price-analysis", StringComparison.OrdinalIgnoreCase))
+        {
+            var byName = await _db.Products
+                .FirstOrDefaultAsync(p => p.Source == src && p.NormalizedName == normalized, ct);
+            if (byName is not null)
+            {
+                byName.Update(displayName, price, src, category, collected);
+                await _db.SaveChangesAsync(ct);
+                return byName;
+            }
+        }
+
         var existing = await _db.Products
             .FirstOrDefaultAsync(p => p.ExternalId == ext && p.Source == src, ct);
 
-        var collected = DateTime.UtcNow;
         if (existing is not null)
         {
             existing.Update(displayName, price, src, category, collected);

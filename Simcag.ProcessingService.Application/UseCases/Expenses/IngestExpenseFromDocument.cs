@@ -105,7 +105,14 @@ public sealed class IngestExpenseFromDocumentHandler
         }
 
         var supplier = await ResolveOrCreateSupplierAsync(request, ct);
+        var structuredLines = NormalizeStructuredLines(linesForIngest);
         var (description, category) = NormalizeDescriptionAndCategory(request);
+        (description, category) = RefineAggregateFromStructuredLines(
+            description,
+            category,
+            structuredLines,
+            request.DocumentType);
+
         var issueDate = request.IssueDate ?? DateTime.UtcNow.Date;
 
         var confidence = ComputeConfidence(request, linesForIngest);
@@ -121,7 +128,6 @@ public sealed class IngestExpenseFromDocumentHandler
             rawDocumentId: request.RawDocumentId,
             confidenceScore: confidence);
 
-        var structuredLines = NormalizeStructuredLines(linesForIngest);
         var fallbackAmount = request.Amount ?? 0m;
 
         // Sempre cria pelo menos 1 ExpenseItem (invariante: aprovação requer items).
@@ -187,6 +193,81 @@ public sealed class IngestExpenseFromDocumentHandler
         var category = string.IsNullOrWhiteSpace(req.FallbackCategory) ? "Outros" : req.FallbackCategory!;
         return (description, category);
     }
+
+    private static (string description, string category) RefineAggregateFromStructuredLines(
+        string description,
+        string category,
+        List<(string Description, decimal UnitPrice)> lines,
+        string documentType)
+    {
+        if (lines.Count == 0)
+            return (description, category);
+
+        if (!IsSyntheticBalanceSheetHeader(description))
+            return (description, category);
+
+        var title = BuildHumanReadableExpenseTitle(lines, documentType);
+        var cat = InferExpenseCategoryFromLines(lines, documentType, category);
+        return (title, cat);
+    }
+
+    private static bool IsSyntheticBalanceSheetHeader(string description)
+    {
+        var d = description.Trim();
+        if (d.Length == 0)
+            return false;
+        if (d.Contains("BALANCE_SHEET", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return SyntheticMultiItemSummaryRx.IsMatch(d);
+    }
+
+    private static string BuildHumanReadableExpenseTitle(
+        List<(string Description, decimal UnitPrice)> lines,
+        string documentType)
+    {
+        var docLabel = documentType.Contains("BALANCE", StringComparison.OrdinalIgnoreCase)
+            ? "Balancete de despesas"
+            : "Despesas";
+        var n = lines.Count;
+        var samples = string.Join(" · ", lines.Take(2).Select(l => l.Description));
+        var more = n > 2 ? $" (+{n - 2})" : "";
+        var s = $"{docLabel} ({n} itens): {samples}{more}";
+        return s.Length > 500 ? s[..500] : s;
+    }
+
+    private const int MaxExpenseCategoryLength = 120;
+
+    private static string InferExpenseCategoryFromLines(
+        List<(string Description, decimal UnitPrice)> lines,
+        string documentType,
+        string fallback)
+    {
+        if (documentType.Contains("BALANCE", StringComparison.OrdinalIgnoreCase))
+        {
+            var prefix = TryExtractLineCategoryPrefix(lines[0].Description);
+            if (!string.IsNullOrWhiteSpace(prefix))
+                return TruncateCategory(prefix);
+        }
+
+        var p = TryExtractLineCategoryPrefix(lines[0].Description);
+        return string.IsNullOrWhiteSpace(p) ? fallback : TruncateCategory(p);
+    }
+
+    private static string? TryExtractLineCategoryPrefix(string lineDescription)
+    {
+        if (string.IsNullOrWhiteSpace(lineDescription))
+            return null;
+        var s = lineDescription.Trim();
+        var sep = s.IndexOf('—');
+        if (sep < 0)
+            sep = s.IndexOf(" - ");
+        if (sep <= 0)
+            return null;
+        return s[..sep].Trim();
+    }
+
+    private static string TruncateCategory(string c) =>
+        c.Length <= MaxExpenseCategoryLength ? c : c[..MaxExpenseCategoryLength];
 
     /// <summary>
     /// Heurística de confidence: cada campo extraído contribui com peso. Tudo extraído ⇒ ~1.0;

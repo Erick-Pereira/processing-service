@@ -7,11 +7,11 @@ namespace Simcag.ProcessingService.Domain.Entities
     public class Product
     {
         public Guid Id { get; private set; }
-        public string ExternalId { get; private set; }
-        public string Name { get; private set; }
-        public string NormalizedName { get; private set; }
+        public string ExternalId { get; private set; } = null!;
+        public string Name { get; private set; } = null!;
+        public string NormalizedName { get; private set; } = null!;
         public decimal Price { get; private set; }
-        public string Source { get; private set; }
+        public string Source { get; private set; } = null!;
         public string? Category { get; private set; }
         public DateTime CollectionDate { get; private set; }
         public DateTime CreatedAt { get; private set; }
@@ -54,7 +54,8 @@ namespace Simcag.ProcessingService.Domain.Entities
             Validate();
         }
 
-        private static string NormalizeName(string rawName)
+        /// <summary>Normalização alinhada à coluna <c>NormalizedName</c> (dedupe / catálogo).</summary>
+        public static string ComputeNormalizedName(string rawName)
         {
             if (string.IsNullOrWhiteSpace(rawName))
                 return string.Empty;
@@ -63,9 +64,11 @@ namespace Simcag.ProcessingService.Domain.Entities
             normalized = Regex.Replace(normalized, @"\s+", " ");
             normalized = CultureInfo.CurrentCulture.TextInfo.ToTitleCase(normalized.ToLowerInvariant());
             normalized = Regex.Replace(normalized, @"[^a-zA-Z0-9\s\-]", "");
-            
+
             return normalized.Trim().Replace(" ", "-");
         }
+
+        private static string NormalizeName(string rawName) => ComputeNormalizedName(rawName);
 
         private void Validate()
         {
