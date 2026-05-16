@@ -8,10 +8,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Simcag.ProcessingService.Api.Middleware;
 using Simcag.ProcessingService.Api.Workers;
+using Simcag.ProcessingService.Application.Configuration;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.UseCases.Expenses;
 using Simcag.ProcessingService.Domain.Exceptions;
+using Simcag.ProcessingService.Infrastructure;
 using Simcag.ProcessingService.Infrastructure.Auditing;
+using Simcag.ProcessingService.Infrastructure.Messaging;
 using Simcag.ProcessingService.Infrastructure.Persistence;
 using Simcag.ProcessingService.Infrastructure.Persistence.Repositories;
 using Simcag.ProcessingService.Infrastructure.Services;
@@ -23,6 +26,8 @@ using Simcag.Shared.Messaging.Configuration;
 using Simcag.Shared.Messaging.Extensions;
 using Simcag.Shared.MultiTenancy;
 using Simcag.Shared.Hosting;
+using Simcag.Shared.Security;
+using Simcag.Shared.Telemetry;
 
 DotNetEnv.Env.NoClobber().Load();
 ContainerListenConfiguration.NormalizeAspNetCoreListenUrlsInContainer();
@@ -30,11 +35,14 @@ ContainerListenConfiguration.NormalizeAspNetCoreListenUrlsInContainer();
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddSimcagDistributedTelemetry("Simcag.ProcessingService");
 ContainerListenConfiguration.ApplyDockerListenUrls(builder);
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
+        options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+        options.JsonSerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
     });
 builder.Services.AddEndpointsApiExplorer();
@@ -64,6 +72,7 @@ var rabbitMqOptions = new RabbitMqOptions
     Password = Environment.GetEnvironmentVariable("RABBITMQ__PASSWORD") ?? throw new InvalidOperationException("RABBITMQ__PASSWORD not set"),
     VirtualHost = Environment.GetEnvironmentVariable("RABBITMQ__VIRTUALHOST") ?? "/"
 };
+rabbitMqOptions.ApplyMessageSigningFromEnvironment();
 
 var connectionString = $"Host={Environment.GetEnvironmentVariable("DB__HOST")};" +
                       $"Port={Environment.GetEnvironmentVariable("DB__PORT")};" +
@@ -92,15 +101,36 @@ builder.Services.AddDbContext<ProcessingDbContext>((sp, options) =>
     options.AddInterceptors(interceptor);
 });
 
+builder.Services.Configure<InsightSnapshotOptions>(
+    builder.Configuration.GetSection(InsightSnapshotOptions.SectionName));
+
+builder.Services.Configure<OutboxRelayOptions>(
+    builder.Configuration.GetSection(OutboxRelayOptions.SectionName));
+
+builder.Services.Configure<GatewayTrustOptions>(o =>
+{
+    o.DownstreamHmacSecret =
+        Environment.GetEnvironmentVariable("SIMCAG_GATEWAY_DOWNSTREAM_HMAC_SECRET")
+        ?? Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HMAC_SECRET");
+    o.RequireGatewayProof =
+        string.Equals(Environment.GetEnvironmentVariable("SIMCAG_REQUIRE_GATEWAY_PROOF"), "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(Environment.GetEnvironmentVariable("SIMCAG_REQUIRE_GATEWAY_PROOF"), "1", StringComparison.Ordinal);
+    var skew = Environment.GetEnvironmentVariable("SIMCAG_GATEWAY_PROOF_MAX_SKEW_SECONDS");
+    if (int.TryParse(skew, out var s) && s > 0)
+        o.MaxProofClockSkewSeconds = s;
+});
+
 // Repos write-side
 builder.Services.AddScoped<IExpenseRepository, ExpenseRepository>();
+builder.Services.AddScoped<IOperationalInsightSnapshotRepository, OperationalInsightSnapshotRepository>();
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
+builder.Services.AddScoped<IProductCatalogQueryRepository, ProductCatalogQueryRepository>();
 builder.Services.AddScoped<ISupplierRepository, SupplierRepository>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+builder.Services.AddScoped<IExpenseComplianceRepository, ExpenseComplianceRepository>();
 builder.Services.AddScoped<IIdempotencyChecker, IdempotencyChecker>();
-builder.Services.AddScoped<Simcag.ProcessingService.Application.Interfaces.IEventPublisher,
-    Simcag.ProcessingService.Application.Adapters.SharedEventPublisherAdapter>();
+builder.Services.AddProcessingTransactionalOutbox();
 
 // Read-side (Dapper)
 builder.Services.AddScoped<IDashboardQueryRepository>(sp =>
@@ -115,6 +145,7 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddRabbitMqMessaging(rabbitMqOptions);
 
 var eventsExchange = EventBusConstants.GetEventsExchangeName();
+builder.Services.AddRabbitMqOutboxRelayTransport(eventsExchange);
 
 // === Canônico v1: ingestion → processing ===
 builder.Services.AddRabbitMqEventConsumer<DataIngestedEvent>(EventBusConstants.QueueDataIngested, eventsExchange);
@@ -131,9 +162,12 @@ builder.Services.AddAuthorization();
 // Background workers
 builder.Services.AddHostedService<DataIngestedConsumer>();
 builder.Services.AddHostedService<PriceAnalyzedConsumer>();
+builder.Services.AddHostedService<OutboxRelayWorker>();
 builder.Services.AddHostedService<DashboardRefreshWorker>();
 
 var app = builder.Build();
+
+app.UseSimcagHttpCorrelationActivityTags();
 
 // Aplica migrations no boot.
 using (var scope = app.Services.CreateScope())
@@ -194,5 +228,7 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = registration => registration.Tags?.Contains("live") == true,
 });
+
+app.UseSimcagTelemetryEndpoints();
 
 app.Run();

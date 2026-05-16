@@ -1,7 +1,7 @@
 # Multi-stage — contexto: pasta processing-service (monorepo) ou repo standalone.
 # Inclui ReadModel no grafo de restore. Simcag.Shared via GitHub Packages.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS builder
 
 WORKDIR /src
 
@@ -37,7 +37,7 @@ RUN dotnet publish "Simcag.ProcessingService.Api/Simcag.ProcessingService.Api.cs
     --no-restore \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 
 WORKDIR /app
 

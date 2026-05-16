@@ -29,7 +29,9 @@ public sealed class ExpenseRepository : IExpenseRepository
         _db.Expenses.FirstOrDefaultAsync(e => e.RawDocumentId == rawDocumentId, ct);
 
     public async Task<(IReadOnlyList<Expense> Items, int Total)> ListAsync(
-        ExpenseStatus? status,
+        ExpenseStatus? legacyStatus,
+        ExpenseProcessingStatus? processingStatus,
+        ExpenseApprovalStatus? approvalStatus,
         string? category,
         Guid? supplierId,
         DateTime? from,
@@ -41,7 +43,12 @@ public sealed class ExpenseRepository : IExpenseRepository
     {
         var filtered = _db.Expenses.AsNoTracking();
 
-        if (status.HasValue) filtered = filtered.Where(e => e.Status == status.Value);
+        if (legacyStatus.HasValue)
+            filtered = ApplyLegacyStatusFilter(filtered, legacyStatus.Value);
+        if (processingStatus.HasValue)
+            filtered = filtered.Where(e => e.ProcessingStatus == processingStatus.Value);
+        if (approvalStatus.HasValue)
+            filtered = filtered.Where(e => e.ApprovalStatus == approvalStatus.Value);
         if (!string.IsNullOrWhiteSpace(category)) filtered = filtered.Where(e => e.Category == category);
         if (supplierId.HasValue) filtered = filtered.Where(e => e.SupplierId == supplierId);
         if (from.HasValue) filtered = filtered.Where(e => e.IssueDate >= from.Value);
@@ -58,6 +65,28 @@ public sealed class ExpenseRepository : IExpenseRepository
             .ToListAsync(ct);
         return (items, total);
     }
+
+    /// <summary>
+    /// Filtro legado por <see cref="ExpenseStatus"/>: <c>Pending</c> corresponde à fila de aprovação humana
+    /// (processamento já terminou com sucesso ou degradação controlada), excluindo falhas técnicas e liquidação total.
+    /// </summary>
+    private static IQueryable<Expense> ApplyLegacyStatusFilter(IQueryable<Expense> query, ExpenseStatus status) =>
+        status switch
+        {
+            ExpenseStatus.Pending => query.Where(e =>
+                e.ApprovalStatus == ExpenseApprovalStatus.PendingApproval
+                && e.SettlementStatus != ExpenseSettlementStatus.Paid
+                && (e.ProcessingStatus == ExpenseProcessingStatus.Completed
+                    || e.ProcessingStatus == ExpenseProcessingStatus.PartiallyCompleted)),
+            ExpenseStatus.Approved => query.Where(e =>
+                e.ApprovalStatus == ExpenseApprovalStatus.Approved
+                && e.SettlementStatus != ExpenseSettlementStatus.Paid),
+            ExpenseStatus.Paid => query.Where(e => e.SettlementStatus == ExpenseSettlementStatus.Paid),
+            ExpenseStatus.Cancelled => query.Where(e => e.ApprovalStatus == ExpenseApprovalStatus.Cancelled),
+            ExpenseStatus.Rejected => query.Where(e => e.ApprovalStatus == ExpenseApprovalStatus.Rejected),
+            ExpenseStatus.ProcessingFailed => query.Where(e => e.ProcessingStatus == ExpenseProcessingStatus.Failed),
+            _ => query,
+        };
 
     public Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, CancellationToken ct = default) =>
         _db.Expenses

@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Simcag.ProcessingService.Application.UseCases.Dashboards;
+using Simcag.Shared.Security;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
@@ -18,34 +19,8 @@ public sealed class DashboardController : ControllerBase
     [HttpGet("summary")]
     public async Task<IActionResult> Summary([FromQuery] int? year, CancellationToken ct)
     {
-        var y = year ?? DateTime.UtcNow.Year;
-        var rows = await _mediator.Send(new GetMonthlyDashboardQuery(y), ct);
-        var totalAmount = rows.Sum(r => r.TotalAmount);
-        var totalExpenseLines = rows.Sum(r => r.ExpenseCount);
-        var supplierIds = new HashSet<Guid>(rows.Select(r => r.SupplierId).Where(id => id != Guid.Empty));
-        var outstanding = rows.Sum(r => r.Outstanding);
-
-        // Heuristic "status" bars for UI (0–100); refine when domain rules exist.
-        var supplierScore = supplierIds.Count == 0 ? 0 : Math.Min(100, supplierIds.Count * 8);
-        var docScore = totalExpenseLines == 0 ? 0 : Math.Min(100, 50 + totalExpenseLines);
-        var confScore = totalAmount <= 0
-            ? 60
-            : (int)Math.Clamp(100.0 - (double)(outstanding / totalAmount * 30m), 0, 100);
-
-        return Ok(new
-        {
-            year = y,
-            economiaIdentificada = outstanding > 0 ? outstanding : totalAmount,
-            auditoriasRealizadas = totalExpenseLines,
-            fornecedoresCadastrados = supplierIds.Count,
-            alertasAtivos = 0,
-            statusGeral = new
-            {
-                conformidades = $"{confScore}%",
-                documentacao = $"{docScore}%",
-                fornecedoresValidados = $"{supplierScore}%"
-            }
-        });
+        var dto = await _mediator.Send(new GetDashboardSummaryQuery(year), ct);
+        return Ok(dto);
     }
 
     [HttpGet("monthly")]
@@ -94,8 +69,24 @@ public sealed class DashboardController : ControllerBase
         return Ok(new { yearsBack, rows });
     }
 
+    /// <summary>Insights operacionais: regras determinísticas + camada de explicabilidade; narração LLM opcional via POST /api/ai/insights/narrative.</summary>
+    [HttpGet("insights")]
+    public async Task<IActionResult> Insights([FromQuery] bool refresh = false, CancellationToken ct = default)
+    {
+        var envelope = await _mediator.Send(new GetOperationalInsightsQuery(refresh), ct);
+        return Ok(envelope);
+    }
+
+    /// <summary>Histórico de snapshots persistidos (metadados) para auditoria temporal.</summary>
+    [HttpGet("insights/history")]
+    public async Task<IActionResult> InsightHistory([FromQuery] int take = 30, CancellationToken ct = default)
+    {
+        var rows = await _mediator.Send(new GetOperationalInsightHistoryQuery(take), ct);
+        return Ok(new { take, rows });
+    }
+
     [HttpPost("/api/admin/refresh-dashboard")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = SimcagRoles.Admin)]
     public async Task<IActionResult> Refresh(CancellationToken ct)
     {
         await _mediator.Send(new RefreshDashboardCommand(), ct);

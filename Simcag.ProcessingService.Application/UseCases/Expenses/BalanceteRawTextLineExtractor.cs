@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Simcag.Shared.Events;
+using Simcag.Shared.Finance;
 
 namespace Simcag.ProcessingService.Application.UseCases.Expenses;
 
@@ -52,7 +53,10 @@ internal static class BalanceteRawTextLineExtractor
             if (fullDesc.Length > 500)
                 fullDesc = fullDesc[..500];
 
-            list.Add(new IngestedExpenseLine { Description = fullDesc, Amount = amt });
+            var normalized = FinancialLineItemSemanticNormalizer.NormalizeFinancialItem(
+                new FinancialItem { Description = fullDesc, Amount = amt });
+
+            list.Add(new IngestedExpenseLine { Description = normalized.Description, Amount = normalized.Amount });
         }
 
         return list.Count > 0 ? list : null;

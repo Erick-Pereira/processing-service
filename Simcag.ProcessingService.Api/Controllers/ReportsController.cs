@@ -59,7 +59,10 @@ public sealed class ReportsController : ControllerBase
     private async Task<IActionResult> GenerateAsync(string label, DateTime from, DateTime to, CancellationToken ct)
     {
         var (expenses, count) = await _expenses.ListAsync(
-            status: null, category: null, supplierId: null,
+            legacyStatus: null,
+            processingStatus: null,
+            approvalStatus: null,
+            category: null, supplierId: null,
             from: from, to: to, skip: 0, take: 1000, includePayments: true, ct);
         var totalAmount = expenses.Sum(e => e.TotalAmount);
         var totalPaid = expenses.Sum(e => e.TotalPaid);

@@ -19,6 +19,8 @@ public sealed class ExpensesController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] ExpenseStatus? status,
+        [FromQuery] ExpenseProcessingStatus? processingStatus,
+        [FromQuery] ExpenseApprovalStatus? approvalStatus,
         [FromQuery] string? category,
         [FromQuery] Guid? supplierId,
         [FromQuery] DateTime? from,
@@ -28,7 +30,17 @@ public sealed class ExpensesController : ControllerBase
         CancellationToken ct = default)
     {
         var result = await _mediator.Send(
-            new ListExpensesQuery(status, category, supplierId, from, to, page, pageSize), ct);
+            new ListExpensesQuery(
+                status,
+                processingStatus,
+                approvalStatus,
+                category,
+                supplierId,
+                from,
+                to,
+                page,
+                pageSize),
+            ct);
         return Ok(result);
     }
 
@@ -50,6 +62,20 @@ public sealed class ExpensesController : ControllerBase
     public async Task<IActionResult> Approve(Guid id, CancellationToken ct)
     {
         await _mediator.Send(new ApproveExpenseCommand(id), ct);
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/reject")]
+    public async Task<IActionResult> Reject(Guid id, [FromBody] RejectExpenseRequest body, CancellationToken ct)
+    {
+        await _mediator.Send(new RejectExpenseCommand(id, body.Reason), ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/retry-processing")]
+    public async Task<IActionResult> RetryProcessing(Guid id, CancellationToken ct)
+    {
+        await _mediator.Send(new RetryExpenseProcessingCommand(id), ct);
         return NoContent();
     }
 
@@ -77,6 +103,8 @@ public sealed class ExpensesController : ControllerBase
 }
 
 public sealed record CancelExpenseRequest(string Reason);
+
+public sealed record RejectExpenseRequest(string Reason);
 
 public sealed record RegisterPaymentBody(decimal Amount, DateTime PaymentDate, PaymentMethod Method, string? ReferenceCode);
 

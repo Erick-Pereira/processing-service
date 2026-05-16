@@ -4,13 +4,17 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
+using Simcag.ProcessingService.Application.Messaging;
 using Simcag.ProcessingService.Application.UseCases.Expenses;
+using Simcag.ProcessingService.Infrastructure.Persistence;
 using Simcag.Shared.Events;
 using Simcag.Shared.Messaging.Contracts;
+using Simcag.Shared.Messaging.Telemetry;
 using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Api.Workers;
@@ -22,11 +26,12 @@ namespace Simcag.ProcessingService.Api.Workers;
 /// 1. Cria um scope DI dedicado (DbContext + repos + AmbientPrincipal).
 /// 2. Popula <see cref="AmbientPrincipal"/> com TenantId/UploadedBy do evento → o DbContext,
 ///    o AuditInterceptor e os global query filters passam a "ver" o tenant correto.
-/// 3. Despacha <see cref="IngestExpenseFromDocumentCommand"/> via MediatR. O command é
-///    idempotente por <c>RawDocumentId</c> (índice único no banco).
-/// 4. Marca o EventId como processado em <see cref="IIdempotencyChecker"/> (defesa em
-///    profundidade contra reentrega antes do ack chegar).
-/// 5. Ack/Nack RabbitMQ com retry exponencial.
+/// 3. Abre transação no <see cref="ProcessingDbContext"/> e reserva inbox
+///    (<see cref="IConsumerInbox"/>) por <c>transport_message_id</c> (envelope) — dedupe real de reentrega.
+/// 4. Despacha <see cref="IngestExpenseFromDocumentCommand"/> via MediatR. Idempotência de negócio por
+///    <c>RawDocumentId</c> (índice único) continua a aplicar-se dentro da mesma transação.
+/// 5. Marca inbox como concluída e faz commit — atomicidade inbox + despesa + auditoria (mesmo DbContext).
+/// 6. Ack/Nack RabbitMQ com retry exponencial.
 ///
 /// Substitui o <c>PriceProcessingBackgroundService</c> (legado, conceito "produto").
 /// </summary>
@@ -56,7 +61,8 @@ public sealed class DataIngestedConsumer : BackgroundService
         {
             await foreach (var envelope in _consumer.ReadMessagesAsync(stoppingToken))
             {
-                await HandleEnvelopeAsync(envelope, stoppingToken);
+                using (MessagingConsumeTelemetry.BeginConsume(envelope, out _))
+                    await HandleEnvelopeAsync(envelope, stoppingToken);
             }
         }
         catch (OperationCanceledException)
@@ -77,7 +83,7 @@ public sealed class DataIngestedConsumer : BackgroundService
         {
             try
             {
-                var status = await ProcessAsync(evt, ct);
+                var status = await ProcessAsync(envelope, ct);
 
                 switch (status)
                 {
@@ -109,8 +115,9 @@ public sealed class DataIngestedConsumer : BackgroundService
         }
     }
 
-    private async Task<ProcessOutcome> ProcessAsync(DataIngestedEvent evt, CancellationToken ct)
+    private async Task<ProcessOutcome> ProcessAsync(MessageEnvelope<DataIngestedEvent> envelope, CancellationToken ct)
     {
+        var evt = envelope.Data;
         if (!IsValid(evt))
         {
             return ProcessOutcome.Invalid;
@@ -127,16 +134,30 @@ public sealed class DataIngestedConsumer : BackgroundService
             userId: evt.UploadedBy == Guid.Empty ? null : evt.UploadedBy,
             userName: "ingestion-pipeline");
 
-        // Defesa em profundidade: se a mensagem foi reentregue antes do ack,
-        // o IdempotencyChecker (Redis ou ProcessedEvents table) corta na origem.
-        var idem = sp.GetRequiredService<IIdempotencyChecker>();
-        if (await idem.IsAlreadyProcessed(evt.EventId.ToString(), ct))
-        {
-            _log.LogInformation("DataIngestedEvent {EventId} já processado (idempotency check).", evt.EventId);
-            return ProcessOutcome.AlreadyProcessed;
-        }
+        var db = sp.GetRequiredService<ProcessingDbContext>();
+        var inbox = sp.GetRequiredService<IConsumerInbox>();
 
-        var mediator = sp.GetRequiredService<IMediator>();
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var reserved = await inbox.TryReserveAsync(
+                    ProcessingConsumerGroups.DataIngested,
+                    envelope.MessageId,
+                    evt.TenantId,
+                    evt.EventId,
+                    ct)
+                .ConfigureAwait(false);
+
+            if (!reserved)
+            {
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                _log.LogInformation(
+                    "DataIngested envelope {TransportMessageId} já reservado na inbox; reentrega segura.",
+                    envelope.MessageId);
+                return ProcessOutcome.AlreadyProcessed;
+            }
+
+            var mediator = sp.GetRequiredService<IMediator>();
         var lines = ResolveIngestedLines(evt);
         _log.LogInformation(
             "DataIngestedEvent {EventId}: linhas para despesa = {LineCount} (ExtractedFields.Lines={Direct}, fallback Extra={FromExtra}).",
@@ -156,15 +177,25 @@ public sealed class DataIngestedConsumer : BackgroundService
             SupplierTaxId: ef?.SupplierTaxId,
             FallbackCategory: "Outros",
             Lines: lines,
-            RawText: evt.RawText), ct);
+            RawText: evt.RawText), ct).ConfigureAwait(false);
 
-        await idem.MarkAsProcessed(evt.EventId.ToString(), ct);
+            await inbox
+                .MarkCompletedAsync(ProcessingConsumerGroups.DataIngested, envelope.MessageId, ct)
+                .ConfigureAwait(false);
 
-        _log.LogInformation(
-            "DataIngestedEvent {EventId} → Expense {ExpenseId} (alreadyIngested={Already}).",
-            evt.EventId, result.ExpenseId, result.AlreadyIngested);
+            await tx.CommitAsync(ct).ConfigureAwait(false);
 
-        return result.AlreadyIngested ? ProcessOutcome.AlreadyProcessed : ProcessOutcome.Ok;
+            _log.LogInformation(
+                "DataIngestedEvent {EventId} → Expense {ExpenseId} (alreadyIngested={Already}).",
+                evt.EventId, result.ExpenseId, result.AlreadyIngested);
+
+            return result.AlreadyIngested ? ProcessOutcome.AlreadyProcessed : ProcessOutcome.Ok;
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private static readonly JsonSerializerOptions LinesJsonOptions = new()

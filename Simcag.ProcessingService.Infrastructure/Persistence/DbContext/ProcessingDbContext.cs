@@ -39,11 +39,16 @@ public class ProcessingDbContext : DbContext
 
     public DbSet<Product> Products { get; set; } = null!;
     public DbSet<ProcessedEvent> ProcessedEvents { get; set; } = null!;
+    public DbSet<MessageOutbox> MessageOutboxes => Set<MessageOutbox>();
+    public DbSet<ConsumerInboxRecord> ConsumerInboxRecords => Set<ConsumerInboxRecord>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<ExpenseItem> ExpenseItems => Set<ExpenseItem>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<OperationalInsightSnapshot> OperationalInsightSnapshots => Set<OperationalInsightSnapshot>();
+    public DbSet<ExpenseComplianceFinding> ExpenseComplianceFindings => Set<ExpenseComplianceFinding>();
+    public DbSet<ExpenseComplianceComment> ExpenseComplianceComments => Set<ExpenseComplianceComment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -76,6 +81,11 @@ public class ProcessingDbContext : DbContext
         ConfigurePayment(modelBuilder);
         ConfigureSupplier(modelBuilder);
         ConfigureAuditLog(modelBuilder);
+        ConfigureOperationalInsightSnapshot(modelBuilder);
+        ConfigureMessageOutbox(modelBuilder);
+        ConfigureConsumerInbox(modelBuilder);
+        ConfigureExpenseComplianceFinding(modelBuilder);
+        ConfigureExpenseComplianceComment(modelBuilder);
 
         ApplyTenantQueryFilters(modelBuilder);
     }
@@ -97,8 +107,27 @@ public class ProcessingDbContext : DbContext
             e.Property(x => x.Status)
                 .HasColumnName("status")
                 .HasConversion<string>()
-                .HasMaxLength(16)
+                .HasMaxLength(24)
                 .IsRequired();
+            e.Property(x => x.ProcessingStatus)
+                .HasColumnName("processing_status")
+                .HasConversion<string>()
+                .HasMaxLength(32)
+                .IsRequired();
+            e.Property(x => x.ApprovalStatus)
+                .HasColumnName("approval_status")
+                .HasConversion<string>()
+                .HasMaxLength(32)
+                .IsRequired();
+            e.Property(x => x.SettlementStatus)
+                .HasColumnName("settlement_status")
+                .HasConversion<string>()
+                .HasMaxLength(24)
+                .IsRequired();
+            e.Property(x => x.ProcessingFailureReason).HasColumnName("processing_failure_reason").HasMaxLength(2000);
+            e.Property(x => x.ProcessingFailedAt).HasColumnName("processing_failed_at");
+            e.Property(x => x.ProcessingRetryCount).HasColumnName("processing_retry_count").IsRequired();
+            e.Property(x => x.LastPipelineTransitionAt).HasColumnName("last_pipeline_transition_at");
             e.Property(x => x.RawDocumentId).HasColumnName("raw_document_id");
             e.Property(x => x.ConfidenceScore).HasColumnName("confidence_score").HasColumnType("numeric(4,3)");
             e.Property(x => x.LowConfidence).HasColumnName("low_confidence");
@@ -238,6 +267,27 @@ public class ProcessingDbContext : DbContext
         });
     }
 
+    private static void ConfigureOperationalInsightSnapshot(ModelBuilder mb)
+    {
+        mb.Entity<OperationalInsightSnapshot>(e =>
+        {
+            e.ToTable("operational_insight_snapshots");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id").IsRequired();
+            e.Property(x => x.RuleSetVersion).HasColumnName("rule_set_version").IsRequired().HasMaxLength(64);
+            e.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc").IsRequired();
+            e.Property(x => x.ExpiresAtUtc).HasColumnName("expires_at_utc").IsRequired();
+            e.Property(x => x.PayloadJson).HasColumnName("payload_json").IsRequired().HasColumnType("jsonb");
+            e.Property(x => x.ContextJson).HasColumnName("context_json").HasColumnType("jsonb");
+
+            e.HasIndex(x => new { x.TenantId, x.RuleSetVersion, x.ExpiresAtUtc })
+                .HasDatabaseName("ix_insight_snapshots_tenant_rule_expires");
+            e.HasIndex(x => new { x.TenantId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_insight_snapshots_tenant_created");
+        });
+    }
+
     private void ApplyTenantQueryFilters(ModelBuilder mb)
     {
         // Tenant atual capturado por closure: o filtro é avaliado por query, e EF re-avalia quando o valor muda.
@@ -246,7 +296,129 @@ public class ProcessingDbContext : DbContext
         mb.Entity<Payment>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
         mb.Entity<Supplier>().HasQueryFilter(x => x.IsActive && x.TenantId == CurrentTenantId());
         mb.Entity<AuditLog>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
+        mb.Entity<OperationalInsightSnapshot>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
+        mb.Entity<ExpenseComplianceFinding>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
+        mb.Entity<ExpenseComplianceComment>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
+        mb.Entity<ConsumerInboxRecord>().HasQueryFilter(x => x.TenantId == CurrentTenantId());
         // ExpenseItem é filtrado via Expense (cascade pelo include). Sem filtro próprio.
+    }
+
+    private static void ConfigureMessageOutbox(ModelBuilder mb)
+    {
+        mb.Entity<MessageOutbox>(e =>
+        {
+            e.ToTable("message_outbox");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id").IsRequired();
+            e.Property(x => x.MessageId).HasColumnName("message_id").IsRequired();
+            e.HasIndex(x => x.MessageId).IsUnique().HasDatabaseName("ux_message_outbox_message_id");
+            e.Property(x => x.DedupeKey).HasColumnName("dedupe_key").HasMaxLength(256);
+            e.HasIndex(x => new { x.TenantId, x.DedupeKey })
+                .IsUnique()
+                .HasDatabaseName("ux_message_outbox_tenant_dedupe")
+                .HasFilter("dedupe_key IS NOT NULL");
+            e.Property(x => x.EventType).HasColumnName("event_type").IsRequired().HasMaxLength(200);
+            e.Property(x => x.RoutingKey).HasColumnName("routing_key").IsRequired().HasMaxLength(200);
+            e.Property(x => x.PayloadJson).HasColumnName("payload_json").IsRequired().HasColumnType("jsonb");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id").HasMaxLength(200);
+            e.Property(x => x.TraceParent).HasColumnName("trace_parent").HasMaxLength(256);
+            e.Property(x => x.TraceState).HasColumnName("trace_state").HasMaxLength(256);
+            e.Property(x => x.Baggage).HasColumnName("baggage").HasMaxLength(4000);
+            e.Property(x => x.Status)
+                .HasColumnName("status")
+                .HasConversion<string>()
+                .HasMaxLength(32)
+                .IsRequired();
+            e.Property(x => x.AttemptCount).HasColumnName("attempt_count").IsRequired();
+            e.Property(x => x.MaxAttempts).HasColumnName("max_attempts").IsRequired();
+            e.Property(x => x.NextAttemptAtUtc).HasColumnName("next_attempt_at_utc").IsRequired();
+            e.Property(x => x.LockedUntilUtc).HasColumnName("locked_until_utc");
+            e.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc").IsRequired();
+            e.Property(x => x.PublishedAtUtc).HasColumnName("published_at_utc");
+            e.Property(x => x.PoisonedAtUtc).HasColumnName("poisoned_at_utc");
+            e.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            e.HasIndex(x => new { x.Status, x.NextAttemptAtUtc }).HasDatabaseName("ix_message_outbox_status_next_attempt");
+        });
+    }
+
+    private static void ConfigureConsumerInbox(ModelBuilder mb)
+    {
+        mb.Entity<ConsumerInboxRecord>(e =>
+        {
+            e.ToTable("consumer_inbox");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id").IsRequired();
+            e.Property(x => x.ConsumerGroup).HasColumnName("consumer_group").IsRequired().HasMaxLength(128);
+            e.Property(x => x.TransportMessageId).HasColumnName("transport_message_id").IsRequired();
+            e.Property(x => x.DomainEventId).HasColumnName("domain_event_id");
+            e.Property(x => x.Status)
+                .HasColumnName("status")
+                .HasConversion<string>()
+                .HasMaxLength(32)
+                .IsRequired();
+            e.Property(x => x.ReceivedAtUtc).HasColumnName("received_at_utc").IsRequired();
+            e.Property(x => x.CompletedAtUtc).HasColumnName("completed_at_utc");
+            e.Property(x => x.AttemptCount).HasColumnName("attempt_count").IsRequired();
+            e.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            e.HasIndex(x => new { x.ConsumerGroup, x.TransportMessageId })
+                .IsUnique()
+                .HasDatabaseName("ux_consumer_inbox_group_transport");
+            e.HasIndex(x => new { x.TenantId, x.ConsumerGroup, x.ReceivedAtUtc })
+                .HasDatabaseName("ix_consumer_inbox_tenant_group_received");
+        });
+    }
+
+    private static void ConfigureExpenseComplianceFinding(ModelBuilder mb)
+    {
+        mb.Entity<ExpenseComplianceFinding>(e =>
+        {
+            e.ToTable("expense_compliance_findings");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id").IsRequired();
+            e.Property(x => x.ExpenseId).HasColumnName("expense_id").IsRequired();
+            e.Property(x => x.RuleCode).HasColumnName("rule_code").IsRequired().HasMaxLength(64);
+            e.Property(x => x.Title).HasColumnName("title").IsRequired().HasMaxLength(200);
+            e.Property(x => x.Description).HasColumnName("description").IsRequired().HasMaxLength(2000);
+            e.Property(x => x.Severity).HasColumnName("severity").IsRequired().HasMaxLength(16);
+            e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(16);
+            e.Property(x => x.Origin).HasColumnName("origin").IsRequired().HasMaxLength(16);
+            e.Property(x => x.Confidence).HasColumnName("confidence").HasColumnType("numeric(4,3)");
+            e.Property(x => x.DetailJson).HasColumnName("detail_json").HasColumnType("jsonb");
+            e.Property(x => x.EvidenceDocumentIdsJson).HasColumnName("evidence_document_ids_json").HasColumnType("jsonb");
+            e.Property(x => x.EvaluatedAtUtc).HasColumnName("evaluated_at_utc").IsRequired();
+            e.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc").IsRequired();
+            e.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc").IsRequired();
+            e.Property(x => x.WaivedAtUtc).HasColumnName("waived_at_utc");
+            e.Property(x => x.WaivedByUserId).HasColumnName("waived_by_user_id");
+            e.Property(x => x.WaivedByUserName).HasColumnName("waived_by_user_name").HasMaxLength(200);
+            e.Property(x => x.WaivedReason).HasColumnName("waived_reason").HasMaxLength(2000);
+            e.HasIndex(x => new { x.TenantId, x.ExpenseId, x.RuleCode })
+                .IsUnique()
+                .HasDatabaseName("ux_expense_compliance_tenant_expense_rule");
+            e.HasIndex(x => new { x.TenantId, x.Status }).HasDatabaseName("ix_expense_compliance_tenant_status");
+        });
+    }
+
+    private static void ConfigureExpenseComplianceComment(ModelBuilder mb)
+    {
+        mb.Entity<ExpenseComplianceComment>(e =>
+        {
+            e.ToTable("expense_compliance_comments");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.TenantId).HasColumnName("tenant_id").IsRequired();
+            e.Property(x => x.FindingId).HasColumnName("finding_id").IsRequired();
+            e.Property(x => x.ExpenseId).HasColumnName("expense_id").IsRequired();
+            e.Property(x => x.Body).HasColumnName("body").IsRequired().HasMaxLength(4000);
+            e.Property(x => x.AuthorUserId).HasColumnName("author_user_id");
+            e.Property(x => x.AuthorUserName).HasColumnName("author_user_name").HasMaxLength(200);
+            e.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc").IsRequired();
+            e.HasIndex(x => x.FindingId).HasDatabaseName("ix_expense_compliance_comments_finding_id");
+            e.HasIndex(x => new { x.TenantId, x.ExpenseId }).HasDatabaseName("ix_expense_compliance_comments_tenant_expense");
+        });
     }
 
     /// <summary>

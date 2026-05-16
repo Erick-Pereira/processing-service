@@ -9,13 +9,14 @@ using MediatR;
 using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
+using Simcag.ProcessingService.Domain.Enums;
 using Simcag.Shared.Events;
 using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Application.UseCases.Expenses;
 
 /// <summary>
-/// Cria uma <see cref="Expense"/> em estado <c>Pending</c> a partir do payload do
+/// Cria uma <see cref="Expense"/> com pipeline técnica explícita a partir do payload do
 /// <c>DataIngestedEvent</c> (ingestion → processing). Idempotente por <see cref="RawDocumentId"/>:
 /// se já existir uma despesa para o mesmo documento, retorna o ID existente sem reprocessar.
 ///
@@ -126,7 +127,10 @@ public sealed class IngestExpenseFromDocumentHandler
             dueDate: null,
             currency: "BRL",
             rawDocumentId: request.RawDocumentId,
-            confidenceScore: confidence);
+            confidenceScore: confidence,
+            fromAsyncDocumentIngest: true);
+
+        expense.ApplyProcessingTransition(ExpenseProcessingStatus.Enriching);
 
         var fallbackAmount = request.Amount ?? 0m;
 
@@ -151,7 +155,10 @@ public sealed class IngestExpenseFromDocumentHandler
 
         var amount = expense.TotalAmount;
 
+        expense.MarkPersisting();
         await _expenses.AddAsync(expense, ct);
+        await _expenses.SaveChangesAsync(ct);
+        expense.MarkProcessingCompleted();
         await _expenses.SaveChangesAsync(ct);
 
         _log.LogInformation(

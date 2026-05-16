@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Simcag.ProcessingService.Application.UseCases.Suppliers;
+using Simcag.Shared.Security;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
@@ -52,7 +53,7 @@ public sealed class SuppliersController : ControllerBase
 
     /// <summary>Reatribui despesas do fornecedor origem ao destino e desativa a origem (consolidação / merge).</summary>
     [HttpPost("merge")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = SimcagRoles.Admin)]
     public async Task<IActionResult> Merge([FromBody] MergeSuppliersBody body, CancellationToken ct)
     {
         await _mediator.Send(new MergeSuppliersCommand(body.SourceSupplierId, body.TargetSupplierId), ct);

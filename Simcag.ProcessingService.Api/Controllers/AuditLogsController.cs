@@ -2,13 +2,14 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Simcag.ProcessingService.Application.UseCases.AuditLogs;
+using Simcag.Shared.Security;
 
 namespace Simcag.ProcessingService.Api.Controllers;
 
 [ApiController]
 [Route("api/audit-logs")]
 [Produces("application/json")]
-[Authorize(Roles = "Admin")]
+[Authorize(Roles = SimcagRoles.Admin)]
 public sealed class AuditLogsController : ControllerBase
 {
     private readonly IMediator _mediator;

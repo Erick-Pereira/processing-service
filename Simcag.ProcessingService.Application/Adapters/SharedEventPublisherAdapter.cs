@@ -1,15 +1,16 @@
-using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.Shared.Events;
+using Simcag.Shared.Messaging.Contracts;
 
 namespace Simcag.ProcessingService.Application.Adapters;
 
 /// <summary>
-/// Adapta o publisher canônico tipado (Simcag.Shared.Messaging.Contracts.IEventPublisher&lt;T&gt;)
-/// para a interface local da Application (Simcag.ProcessingService.Application.Interfaces.IEventPublisher),
-/// resolvendo o publisher concreto em runtime para evitar acoplamento de transporte.
+/// Adapta o publisher canônico tipado (<see cref="IEventPublisher{TEvent}"/>)
+/// para a interface local da Application (<see cref="IEventPublisher"/>),
+/// sem reflexão: o tipo concreto de <typeparamref name="T"/> resolve o publisher no DI.
 /// </summary>
 public sealed class SharedEventPublisherAdapter : IEventPublisher
 {
@@ -22,13 +23,7 @@ public sealed class SharedEventPublisherAdapter : IEventPublisher
 
     public Task PublishAsync<T>(T eventMessage, CancellationToken cancellationToken = default) where T : BaseEvent
     {
-        var publisherType = typeof(Simcag.Shared.Messaging.Contracts.IEventPublisher<>).MakeGenericType(typeof(T));
-        var publisher = _serviceProvider.GetService(publisherType)
-            ?? throw new InvalidOperationException(
-                $"Nenhum IEventPublisher<{typeof(T).Name}> registrado. " +
-                $"Registre via builder.Services.AddRabbitMqEventPublisher<{typeof(T).Name}>(exchange).");
-        var method = publisherType.GetMethod("PublishAsync")
-            ?? throw new InvalidOperationException("Método PublishAsync não encontrado em IEventPublisher<T>.");
-        return (Task)method.Invoke(publisher, new object?[] { eventMessage, cancellationToken })!;
+        var publisher = _serviceProvider.GetRequiredService<IEventPublisher<T>>();
+        return publisher.PublishAsync(eventMessage, cancellationToken);
     }
 }

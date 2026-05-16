@@ -11,10 +11,7 @@
     <PackageReference Include="Npgsql" Version="9.0.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.5" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Simcag.Shared" Version="1.0.4" />
+    <PackageReference Include="Simcag.Shared" Version="1.0.5" />
   </ItemGroup>
 
 </Project>

@@ -21,7 +21,9 @@ public interface IExpenseRepository
     Task<Expense?> GetByRawDocumentIdAsync(Guid rawDocumentId, CancellationToken ct = default);
 
     Task<(IReadOnlyList<Expense> Items, int Total)> ListAsync(
-        ExpenseStatus? status,
+        ExpenseStatus? legacyStatus,
+        ExpenseProcessingStatus? processingStatus,
+        ExpenseApprovalStatus? approvalStatus,
         string? category,
         Guid? supplierId,
         DateTime? from,
