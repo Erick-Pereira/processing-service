@@ -64,7 +64,7 @@ public static class OperationalInsightDeterministicNarrative
         var shareStr = x.Evidence.GetValueOrDefault("shareOfTotal", "0%");
         var share = ParsePercent(shareStr);
         var top = x.Evidence.GetValueOrDefault("topCategory", "—");
-        var impact = (int)Math.Clamp(Math.Round((double)(share * 100m)), 0, 100);
+        var impact = (int)Math.Clamp(Math.Round(share * 100m), 0, 100);
         var tier = share >= 0.55m ? "critical" : share >= 0.45m ? "attention" : "info";
         var origin = "Resumo mensal de despesas agregadas por categoria (últimos 12 meses).";
         var simple =
@@ -106,7 +106,7 @@ public static class OperationalInsightDeterministicNarrative
         var deltaStr = x.Evidence.GetValueOrDefault("relativeChange", "0%");
         var delta = ParsePercent(deltaStr);
         var abs = Math.Abs(delta);
-        var impact = (int)Math.Clamp(Math.Round((double)(abs * 100m)), 0, 100);
+        var impact = (int)Math.Clamp(Math.Round(abs * 100m), 0, 100);
         var tier = abs >= 0.35m ? "critical" : abs >= 0.25m ? "attention" : "info";
         var origin = "Totais mensais agregados do condomínio (série histórica interna).";
         var direction = delta >= 0 ? "subiu" : "desceu";

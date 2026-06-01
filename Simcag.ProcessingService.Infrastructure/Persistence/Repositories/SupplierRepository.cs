@@ -63,7 +63,7 @@ public sealed class SupplierRepository : ISupplierRepository
 
         if (existing is not null)
         {
-            existing.Update(name, document, contact: null, category);
+            existing.Update(name, document, contact: null, category, null);
             return existing;
         }
 

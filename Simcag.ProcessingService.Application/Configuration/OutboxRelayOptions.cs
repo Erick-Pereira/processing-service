@@ -5,8 +5,11 @@ public sealed class OutboxRelayOptions
 {
     public const string SectionName = "OutboxRelay";
 
-    /// <summary>Intervalo entre ciclos de despacho.</summary>
+    /// <summary>Intervalo entre ciclos de despacho quando há mensagens na outbox.</summary>
     public int PollIntervalMilliseconds { get; set; } = 750;
+
+    /// <summary>Intervalo quando a outbox está vazia (evita polling agressivo ao Postgres).</summary>
+    public int IdlePollIntervalMilliseconds { get; set; } = 5000;
 
     public int BatchSize { get; set; } = 32;
 

@@ -1,17 +1,14 @@
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using MediatR;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Simcag.ProcessingService.Api.Middleware;
+using Simcag.ProcessingService.Api.ExceptionHandling;
 using Simcag.ProcessingService.Api.Workers;
 using Simcag.ProcessingService.Application.Configuration;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.UseCases.Expenses;
-using Simcag.ProcessingService.Domain.Exceptions;
 using Simcag.ProcessingService.Infrastructure;
 using Simcag.ProcessingService.Infrastructure.Auditing;
 using Simcag.ProcessingService.Infrastructure.Messaging;
@@ -20,6 +17,7 @@ using Simcag.ProcessingService.Infrastructure.Persistence.Repositories;
 using Simcag.ProcessingService.Infrastructure.Services;
 using Simcag.ProcessingService.ReadModel;
 using Simcag.Shared.Auditing;
+using Simcag.Shared.ErrorHandling;
 using Simcag.Shared.Events;
 using Simcag.Shared.Messaging;
 using Simcag.Shared.Messaging.Configuration;
@@ -35,6 +33,8 @@ ContainerListenConfiguration.NormalizeAspNetCoreListenUrlsInContainer();
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
+var isTesting = builder.Environment.IsEnvironment("Testing");
+
 builder.AddSimcagDistributedTelemetry("Simcag.ProcessingService");
 ContainerListenConfiguration.ApplyDockerListenUrls(builder);
 
@@ -64,30 +64,56 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-var rabbitMqOptions = new RabbitMqOptions
+RabbitMqOptions rabbitMqOptions;
+string connectionString;
+
+if (isTesting)
 {
-    Host = Environment.GetEnvironmentVariable("RABBITMQ__HOST") ?? throw new InvalidOperationException("RABBITMQ__HOST not set"),
-    Port = int.Parse(Environment.GetEnvironmentVariable("RABBITMQ__PORT") ?? "5672"),
-    UserName = Environment.GetEnvironmentVariable("RABBITMQ__USERNAME") ?? throw new InvalidOperationException("RABBITMQ__USERNAME not set"),
-    Password = Environment.GetEnvironmentVariable("RABBITMQ__PASSWORD") ?? throw new InvalidOperationException("RABBITMQ__PASSWORD not set"),
-    VirtualHost = Environment.GetEnvironmentVariable("RABBITMQ__VIRTUALHOST") ?? "/"
-};
-rabbitMqOptions.ApplyMessageSigningFromEnvironment();
+    rabbitMqOptions = new RabbitMqOptions
+    {
+        Host = "localhost",
+        Port = 5672,
+        UserName = "guest",
+        Password = "guest",
+        VirtualHost = "/"
+    };
+    connectionString = "Host=localhost;Port=5432;Database=processing_test;Username=postgres;Password=postgres";
+}
+else
+{
+    rabbitMqOptions = new RabbitMqOptions
+    {
+        Host = Environment.GetEnvironmentVariable("RABBITMQ__HOST") ?? throw new InvalidOperationException("RABBITMQ__HOST not set"),
+        Port = int.Parse(Environment.GetEnvironmentVariable("RABBITMQ__PORT") ?? "5672"),
+        UserName = Environment.GetEnvironmentVariable("RABBITMQ__USERNAME") ?? throw new InvalidOperationException("RABBITMQ__USERNAME not set"),
+        Password = Environment.GetEnvironmentVariable("RABBITMQ__PASSWORD") ?? throw new InvalidOperationException("RABBITMQ__PASSWORD not set"),
+        VirtualHost = Environment.GetEnvironmentVariable("RABBITMQ__VIRTUALHOST") ?? "/"
+    };
+    rabbitMqOptions.ApplyMessageSigningFromEnvironment();
 
-var connectionString = $"Host={Environment.GetEnvironmentVariable("DB__HOST")};" +
-                      $"Port={Environment.GetEnvironmentVariable("DB__PORT")};" +
-                      $"Database={Environment.GetEnvironmentVariable("DB__NAME")};" +
-                      $"Username={Environment.GetEnvironmentVariable("DB__USER")};" +
-                      $"Password={Environment.GetEnvironmentVariable("DB__PASSWORD")}";
+    connectionString = $"Host={Environment.GetEnvironmentVariable("DB__HOST")};" +
+                       $"Port={Environment.GetEnvironmentVariable("DB__PORT")};" +
+                       $"Database={Environment.GetEnvironmentVariable("DB__NAME")};" +
+                       $"Username={Environment.GetEnvironmentVariable("DB__USER")};" +
+                       $"Password={Environment.GetEnvironmentVariable("DB__PASSWORD")}";
+}
 
-var rabbitMqHealthUri = $"amqp://{Uri.EscapeDataString(rabbitMqOptions.UserName)}:{Uri.EscapeDataString(rabbitMqOptions.Password)}@{rabbitMqOptions.Host}:{rabbitMqOptions.Port}{(rabbitMqOptions.VirtualHost == "/" ? "/" : "/" + rabbitMqOptions.VirtualHost.TrimStart('/'))}";
+var rabbitMqHealthUri =
+    $"amqp://{Uri.EscapeDataString(rabbitMqOptions.UserName)}:{Uri.EscapeDataString(rabbitMqOptions.Password)}@{rabbitMqOptions.Host}:{rabbitMqOptions.Port}{(rabbitMqOptions.VirtualHost == "/" ? "/" : "/" + rabbitMqOptions.VirtualHost.TrimStart('/'))}";
 
-builder.Services.AddHealthChecks()
-    .AddNpgSql(connectionString, name: "PostgreSQL")
-    .AddRabbitMQ(rabbitMqHealthUri, name: "RabbitMQ")
-    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
+var healthChecks = builder.Services.AddHealthChecks().AddSimcagLiveSelfCheck();
 
-// ===== AUDITING + MULTI-TENANCY =====
+if (isTesting)
+{
+    healthChecks.AddCheck("database", () => HealthCheckResult.Healthy(), tags: [SimcagHealthCheckExtensions.ReadyTag]);
+}
+else
+{
+    healthChecks
+        .AddNpgSql(connectionString, name: "PostgreSQL", tags: [SimcagHealthCheckExtensions.ReadyTag])
+        .AddRabbitMQ(rabbitMqHealthUri, name: "RabbitMQ", tags: [SimcagHealthCheckExtensions.ReadyTag]);
+}
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSimcagAuditing();
 builder.Services.AddSimcagMultiTenancy();
@@ -96,7 +122,11 @@ builder.Services.AddScoped<IAuditLogSink>(sp => sp.GetRequiredService<Processing
 
 builder.Services.AddDbContext<ProcessingDbContext>((sp, options) =>
 {
-    options.UseNpgsql(connectionString);
+    if (isTesting)
+        options.UseInMemoryDatabase("processing_testing");
+    else
+        options.UseNpgsql(connectionString);
+
     var interceptor = sp.GetRequiredService<AuditSaveChangesInterceptor>();
     options.AddInterceptors(interceptor);
 });
@@ -107,20 +137,8 @@ builder.Services.Configure<InsightSnapshotOptions>(
 builder.Services.Configure<OutboxRelayOptions>(
     builder.Configuration.GetSection(OutboxRelayOptions.SectionName));
 
-builder.Services.Configure<GatewayTrustOptions>(o =>
-{
-    o.DownstreamHmacSecret =
-        Environment.GetEnvironmentVariable("SIMCAG_GATEWAY_DOWNSTREAM_HMAC_SECRET")
-        ?? Environment.GetEnvironmentVariable("GATEWAY_DOWNSTREAM_HMAC_SECRET");
-    o.RequireGatewayProof =
-        string.Equals(Environment.GetEnvironmentVariable("SIMCAG_REQUIRE_GATEWAY_PROOF"), "true", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(Environment.GetEnvironmentVariable("SIMCAG_REQUIRE_GATEWAY_PROOF"), "1", StringComparison.Ordinal);
-    var skew = Environment.GetEnvironmentVariable("SIMCAG_GATEWAY_PROOF_MAX_SKEW_SECONDS");
-    if (int.TryParse(skew, out var s) && s > 0)
-        o.MaxProofClockSkewSeconds = s;
-});
+builder.Services.AddSimcagGatewayAuthentication(builder.Environment);
 
-// Repos write-side
 builder.Services.AddScoped<IExpenseRepository, ExpenseRepository>();
 builder.Services.AddScoped<IOperationalInsightSnapshotRepository, OperationalInsightSnapshotRepository>();
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
@@ -132,50 +150,55 @@ builder.Services.AddScoped<IExpenseComplianceRepository, ExpenseComplianceReposi
 builder.Services.AddScoped<IIdempotencyChecker, IdempotencyChecker>();
 builder.Services.AddProcessingTransactionalOutbox();
 
-// Read-side (Dapper)
 builder.Services.AddScoped<IDashboardQueryRepository>(sp =>
     new DashboardQueryRepository(connectionString, sp.GetRequiredService<ITenantContext>()));
+builder.Services.AddScoped<ISupplierQualityReadModel>(sp =>
+    new SupplierQualityReadRepository(connectionString, sp.GetRequiredService<ITenantContext>()));
 
-// MediatR + FluentValidation
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(CreateExpenseCommand).Assembly));
 builder.Services.AddValidatorsFromAssembly(typeof(CreateExpenseCommand).Assembly);
 builder.Services.AddFluentValidationAutoValidation();
 
-builder.Services.AddRabbitMqMessaging(rabbitMqOptions);
+if (!isTesting)
+{
+    builder.Services.AddRabbitMqMessaging(rabbitMqOptions);
 
-var eventsExchange = EventBusConstants.GetEventsExchangeName();
-builder.Services.AddRabbitMqOutboxRelayTransport(eventsExchange);
+    var eventsExchange = EventBusConstants.GetEventsExchangeName();
+    builder.Services.AddRabbitMqOutboxRelayTransport(eventsExchange);
+    builder.Services.AddRabbitMqEventConsumer<DataIngestedEvent>(EventBusConstants.QueueDataIngested, eventsExchange);
+    builder.Services.AddRabbitMqEventConsumer<PriceAnalyzedEvent>(EventBusConstants.QueuePriceAnalyzed, eventsExchange);
 
-// === Canônico v1: ingestion → processing ===
-builder.Services.AddRabbitMqEventConsumer<DataIngestedEvent>(EventBusConstants.QueueDataIngested, eventsExchange);
+    builder.Services.AddHostedService<DataIngestedConsumer>();
+    builder.Services.AddHostedService<PriceAnalyzedConsumer>();
+    builder.Services.AddHostedService<OutboxRelayWorker>();
+    builder.Services.AddHostedService<DashboardRefreshWorker>();
+}
 
-// === price-analysis → processing (auditoria correlacionada ao documento) ===
-builder.Services.AddRabbitMqEventConsumer<PriceAnalyzedEvent>(EventBusConstants.QueuePriceAnalyzed, eventsExchange);
 
-// ===== AUTHN/AUTHZ confiando nos headers do gateway =====
-builder.Services
-    .AddAuthentication(GatewayAuthenticationHandler.SchemeName)
-    .AddScheme<AuthenticationSchemeOptions, GatewayAuthenticationHandler>(GatewayAuthenticationHandler.SchemeName, _ => { });
-builder.Services.AddAuthorization();
-
-// Background workers
-builder.Services.AddHostedService<DataIngestedConsumer>();
-builder.Services.AddHostedService<PriceAnalyzedConsumer>();
-builder.Services.AddHostedService<OutboxRelayWorker>();
-builder.Services.AddHostedService<DashboardRefreshWorker>();
+builder.Services.AddProcessingProblemDetails();
 
 var app = builder.Build();
 
+app.ValidateSimcagGatewayTrustAtStartup();
+
+app.UseSimcagExceptionHandler();
 app.UseSimcagHttpCorrelationActivityTags();
 
-// Aplica migrations no boot.
-using (var scope = app.Services.CreateScope())
+if (!isTesting)
 {
+    using var scope = app.Services.CreateScope();
     try
     {
         var db = scope.ServiceProvider.GetRequiredService<ProcessingDbContext>();
-        await db.Database.MigrateAsync();
+        var pending = await db.Database.GetPendingMigrationsAsync();
+        if (pending.Any())
+        {
+            app.Logger.LogInformation(
+                "Aplicando {Count} migration(s) pendente(s) no ProcessingDbContext.",
+                pending.Count());
+            await db.Database.MigrateAsync();
+        }
     }
     catch (Exception ex)
     {
@@ -189,46 +212,19 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+if (!isTesting)
+    app.UseHttpsRedirection();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Exception → HTTP status mapping.
-//   NotFoundException        → 404 (recurso inexistente OU invisível por query filter de tenant)
-//   DomainException          → 422 (invariante de negócio violada)
-//   CrossTenantWriteException → 403 (escrita cross-tenant detectada no DbContext)
-app.Use(async (ctx, next) =>
-{
-    try { await next(); }
-    catch (NotFoundException ex)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-        await ctx.Response.WriteAsJsonAsync(new
-        {
-            error = ex.Message,
-            resource = ex.Resource,
-            identifier = ex.Identifier
-        });
-    }
-    catch (DomainException ex)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status422UnprocessableEntity;
-        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
-    }
-    catch (CrossTenantWriteException ex)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
-    }
-});
-
 app.MapControllers();
-app.MapHealthChecks("/health");
-app.MapHealthChecks("/health/live", new HealthCheckOptions
-{
-    Predicate = registration => registration.Tags?.Contains("live") == true,
-});
+app.MapSimcagHealthChecks();
 
 app.UseSimcagTelemetryEndpoints();
 
 app.Run();
+
+public partial class Program
+{
+}

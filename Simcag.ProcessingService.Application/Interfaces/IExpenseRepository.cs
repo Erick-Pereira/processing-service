@@ -33,8 +33,8 @@ public interface IExpenseRepository
         bool includePayments = false,
         CancellationToken ct = default);
 
-    /// <summary>Atualiza SupplierId em todas as despesas do tenant atual que apontam para <paramref name="fromSupplierId"/>.</summary>
-    Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, CancellationToken ct = default);
+    /// <summary>Atualiza SupplierId em todas as despesas do tenant atual que apontam para <paramref name="fromSupplierId"/>, e atualiza o score de confiança do fornecedor associado.</summary>
+    Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, decimal? newConfidenceScore, CancellationToken ct = default);
 
     Task AddAsync(Expense expense, CancellationToken ct = default);
 

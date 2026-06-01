@@ -785,6 +785,10 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
                         .HasColumnType("character varying(8)")
                         .HasColumnName("document_type");
 
+                    b.Property<decimal?>("IdentificationConfidenceScore")
+                        .HasColumnType("numeric(4,3)")
+                        .HasColumnName("identification_confidence_score");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");

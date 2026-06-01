@@ -41,11 +41,15 @@ public sealed class OutboxRelayWorker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             var opts = _options.CurrentValue;
+            var delayMs = opts.IdlePollIntervalMilliseconds;
             try
             {
                 using var scope = _scopeFactory.CreateScope();
                 var runner = scope.ServiceProvider.GetRequiredService<OutboxRelayRunner>();
-                await runner.ProcessBatchAsync(stoppingToken).ConfigureAwait(false);
+                var processed = await runner.ProcessBatchAsync(stoppingToken).ConfigureAwait(false);
+                delayMs = processed > 0
+                    ? opts.PollIntervalMilliseconds
+                    : opts.IdlePollIntervalMilliseconds;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -54,11 +58,12 @@ public sealed class OutboxRelayWorker : BackgroundService
             catch (Exception ex)
             {
                 _log.LogError(ex, "Ciclo do OutboxRelayWorker falhou.");
+                delayMs = opts.PollIntervalMilliseconds;
             }
 
             try
             {
-                await Task.Delay(opts.PollIntervalMilliseconds, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(delayMs, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -89,12 +94,13 @@ internal sealed class OutboxRelayRunner
         _log = log;
     }
 
-    public async Task ProcessBatchAsync(CancellationToken cancellationToken)
+    public async Task<int> ProcessBatchAsync(CancellationToken cancellationToken)
     {
         var opts = _options.Value;
         var now = DateTime.UtcNow;
         var lockDuration = TimeSpan.FromSeconds(Math.Clamp(opts.ClaimLockSeconds, 5, 300));
         var maxRows = Math.Clamp(opts.BatchSize, 1, 500);
+        var processed = 0;
 
         for (var i = 0; i < maxRows; i++)
         {
@@ -109,7 +115,9 @@ internal sealed class OutboxRelayRunner
                 .ConfigureAwait(false);
 
             if (row is null)
-                return;
+                return processed;
+
+            processed++;
 
             if (row.Status == MessageOutboxStatus.Dispatching)
                 row.ReclaimStaleDispatching(now, lockDuration);
@@ -165,5 +173,7 @@ internal sealed class OutboxRelayRunner
                 await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             }
         }
+
+        return processed;
     }
 }

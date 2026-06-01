@@ -39,7 +39,7 @@ public sealed class MergeSuppliersHandler : IRequestHandler<MergeSuppliersComman
         if (!target.IsActive)
             throw new DomainException("O fornecedor de destino está inativo; reative-o antes de consolidar.");
 
-        await _expenses.ReassignSupplierAsync(source.Id, target.Id, ct);
+        await _expenses.ReassignSupplierAsync(source.Id, target.Id, null, ct);
 
         source.Deactivate();
         await _suppliers.SaveChangesAsync(ct);

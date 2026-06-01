@@ -228,6 +228,9 @@ public class ProcessingDbContext : DbContext
             e.Property(x => x.IsActive).HasColumnName("is_active");
             e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+            e.Property(x => x.IdentificationConfidenceScore)
+                .HasColumnName("identification_confidence_score")
+                .HasColumnType("numeric(4,3)");
 
             e.OwnsOne(x => x.Contact, c =>
             {

@@ -21,6 +21,7 @@ public sealed class ExpenseRepository : IExpenseRepository
 
     public Task<Expense?> GetByIdWithChildrenAsync(Guid id, CancellationToken ct = default) =>
         _db.Expenses
+            .AsSplitQuery()
             .Include(e => e.Items)
             .Include(e => e.Payments)
             .FirstOrDefaultAsync(e => e.Id == id, ct);
@@ -88,7 +89,7 @@ public sealed class ExpenseRepository : IExpenseRepository
             _ => query,
         };
 
-    public Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, CancellationToken ct = default) =>
+    public Task<int> ReassignSupplierAsync(Guid fromSupplierId, Guid toSupplierId, decimal? newConfidenceScore, CancellationToken ct = default) =>
         _db.Expenses
             .Where(e => e.SupplierId == fromSupplierId)
             .ExecuteUpdateAsync(

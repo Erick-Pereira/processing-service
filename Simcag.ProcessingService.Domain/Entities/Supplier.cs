@@ -37,6 +37,9 @@ public sealed class Supplier : IAuditableEntity
     public DateTime CreatedAt { get; private set; }
     public DateTime UpdatedAt { get; private set; }
 
+    // NOVO: Score de confiança na identificação do fornecedor (0.00 a 1.00).
+    public decimal? IdentificationConfidenceScore { get; private set; }
+
     private Supplier() { }
 
     public static Supplier Create(
@@ -44,7 +47,8 @@ public sealed class Supplier : IAuditableEntity
         string name,
         string document,
         ContactInfo? contact = null,
-        string? category = null)
+        string? category = null,
+        decimal? confidenceScore = null)
     {
         if (tenantId == Guid.Empty) throw new DomainException("TenantId obrigatório.");
         if (string.IsNullOrWhiteSpace(name)) throw new DomainException("Nome do fornecedor obrigatório.");
@@ -65,10 +69,11 @@ public sealed class Supplier : IAuditableEntity
             IsActive = true,
             CreatedAt = now,
             UpdatedAt = now,
+            IdentificationConfidenceScore = confidenceScore
         };
     }
 
-    public void Update(string name, string document, ContactInfo? contact, string? category)
+    public void Update(string name, string document, ContactInfo? contact, string? category, decimal? confidenceScore)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new DomainException("Nome obrigatório.");
         var (digits, type) = NormalizeDocument(document);
@@ -80,6 +85,8 @@ public sealed class Supplier : IAuditableEntity
         if (contact is not null) Contact = contact;
         Category = string.IsNullOrWhiteSpace(category) ? Category : category.Trim();
         UpdatedAt = DateTime.UtcNow;
+        // Atualiza o score de identificação sempre que o fornecedor é atualizado
+        IdentificationConfidenceScore = confidenceScore;
     }
 
     public void Deactivate()

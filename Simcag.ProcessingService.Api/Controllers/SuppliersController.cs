@@ -22,6 +22,14 @@ public sealed class SuppliersController : ControllerBase
         return Ok(items);
     }
 
+    /// <summary>Classifica fornecedores (preço vs benchmark, conformidade, volume) em tiers de recomendação.</summary>
+    [HttpGet("quality-analysis")]
+    public async Task<IActionResult> QualityAnalysis(CancellationToken ct = default)
+    {
+        var dto = await _mediator.Send(new AnalyzeSupplierQualityQuery(), ct);
+        return Ok(dto);
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {

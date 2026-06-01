@@ -38,7 +38,7 @@ public sealed class UpdateSupplierHandler : IRequestHandler<UpdateSupplierComman
         var supplier = await _suppliers.GetByIdAsync(request.Id, ct)
             ?? throw new NotFoundException("Supplier", request.Id);
         var contact = new ContactInfo(request.Email, request.Phone, request.Address);
-        supplier.Update(request.Name, request.Document, contact, request.Category);
+        supplier.Update(request.Name, request.Document, contact, request.Category, null);
         await _suppliers.SaveChangesAsync(ct);
     }
 }

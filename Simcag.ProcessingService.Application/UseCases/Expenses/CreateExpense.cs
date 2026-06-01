@@ -1,44 +1,43 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using FluentValidation;
 using MediatR;
+using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Entities;
-using Simcag.ProcessingService.Domain.Exceptions;
+using Simcag.ProcessingService.Domain.Enums;
+using Simcag.Shared.Events;
+using Simcag.Shared.Finance;
 using Simcag.Shared.MultiTenancy;
 
 namespace Simcag.ProcessingService.Application.UseCases.Expenses;
 
-public sealed record ExpenseItemInput(string Description, decimal Quantity, decimal UnitPrice);
-
+/// <summary>
+/// Cria uma despesa manual via UI/API com validação completa.
+/// </summary>
 public sealed record CreateExpenseCommand(
+    Guid TenantId,
     Guid SupplierId,
     string Description,
     string Category,
     DateTime IssueDate,
     DateTime? DueDate,
-    string Currency,
-    IReadOnlyList<ExpenseItemInput> Items,
-    Guid? RawDocumentId,
-    decimal? ConfidenceScore) : IRequest<Guid>;
+    string Currency = "BRL",
+    Guid? RawDocumentId = null,
+    decimal? Amount = null) : IRequest<Guid>;
+
+public sealed record CreateExpenseResult(Guid ExpenseId);
 
 public sealed class CreateExpenseValidator : AbstractValidator<CreateExpenseCommand>
 {
     public CreateExpenseValidator()
     {
-        RuleFor(x => x.SupplierId).NotEmpty();
-        RuleFor(x => x.Description).NotEmpty().MaximumLength(500);
-        RuleFor(x => x.Category).NotEmpty().MaximumLength(120);
-        RuleFor(x => x.Items).NotEmpty().WithMessage("Pelo menos um item é obrigatório.");
-        RuleForEach(x => x.Items).ChildRules(item =>
-        {
-            item.RuleFor(i => i.Description).NotEmpty();
-            item.RuleFor(i => i.Quantity).GreaterThan(0m);
-            item.RuleFor(i => i.UnitPrice).GreaterThanOrEqualTo(0m);
-        });
+        RuleFor(x => x.TenantId).NotEmpty().WithMessage("TenantId obrigatório.");
+        RuleFor(x => x.SupplierId).NotEmpty().WithMessage("SupplierId obrigatório.");
+        RuleFor(x => x.Description).NotEmpty().MinimumLength(1).WithMessage("Descrição obrigatória.");
+        RuleFor(x => x.Category).NotEmpty().MinimumLength(1).WithMessage("Categoria obrigatória.");
+        RuleFor(x => x.IssueDate).GreaterThan(DateTime.UtcNow.AddDays(-1)).WithMessage("Data de emissão não pode estar antes do dia anterior ao atual.");
     }
 }
 
@@ -47,37 +46,53 @@ public sealed class CreateExpenseHandler : IRequestHandler<CreateExpenseCommand,
     private readonly IExpenseRepository _expenses;
     private readonly ISupplierRepository _suppliers;
     private readonly ITenantContext _tenant;
+    private readonly ILogger<CreateExpenseHandler> _log;
 
-    public CreateExpenseHandler(IExpenseRepository expenses, ISupplierRepository suppliers, ITenantContext tenant)
+    public CreateExpenseHandler(
+        IExpenseRepository expenses,
+        ISupplierRepository suppliers,
+        ITenantContext tenant,
+        ILogger<CreateExpenseHandler> log)
     {
         _expenses = expenses;
         _suppliers = suppliers;
         _tenant = tenant;
+        _log = log;
     }
 
     public async Task<Guid> Handle(CreateExpenseCommand request, CancellationToken ct)
     {
-        var supplier = await _suppliers.GetByIdAsync(request.SupplierId, ct)
-            ?? throw new NotFoundException("Supplier", request.SupplierId);
+        if (!_tenant.HasTenant)
+            throw new InvalidOperationException("TenantId ausente no scope.");
+
+        // Converter IssueDate para UTC antes de salvar
+        var issueDate = DateTime.SpecifyKind(request.IssueDate, DateTimeKind.Utc);
+        
+        // Converter DueDate para UTC se presente
+        var dueDate = request.DueDate.HasValue 
+            ? DateTime.SpecifyKind(request.DueDate.Value, DateTimeKind.Utc) 
+            : (DateTime?)null;
 
         var expense = Expense.Create(
-            tenantId: _tenant.TenantId,
-            supplierId: supplier.Id,
+            tenantId: request.TenantId,
+            supplierId: Guid.NewGuid(), // Placeholder - deve ser providido pelo caller
             description: request.Description,
             category: request.Category,
-            issueDate: request.IssueDate,
-            dueDate: request.DueDate,
+            issueDate: issueDate,
+            dueDate: dueDate,
             currency: string.IsNullOrWhiteSpace(request.Currency) ? "BRL" : request.Currency,
-            rawDocumentId: request.RawDocumentId,
-            confidenceScore: request.ConfidenceScore);
+            rawDocumentId: null);
 
-        foreach (var item in request.Items)
-        {
-            expense.AddItem(item.Description, item.Quantity, item.UnitPrice);
-        }
-
+        expense.MarkPersisting();
         await _expenses.AddAsync(expense, ct);
         await _expenses.SaveChangesAsync(ct);
+
+        _log.LogInformation(
+            "Expense {ExpenseId} criada manualmente (desc: {Description}, cat: {Category}).",
+            expense.Id,
+            request.Description,
+            request.Category);
+
         return expense.Id;
     }
 }

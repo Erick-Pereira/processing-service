@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using Simcag.ProcessingService.Domain.Enums;
 using Simcag.ProcessingService.Domain.Exceptions;
@@ -66,16 +67,19 @@ public sealed class Expense : IAuditableEntity
 
     public bool LowConfidence { get; private set; }
 
-    private readonly List<ExpenseItem> _items = new();
-    public IReadOnlyCollection<ExpenseItem> Items => _items.AsReadOnly();
+    // --- OTIMIZAÇÃO 3: Capacidades explícitas para evitar realocação automática (default capacity 16) ---
+    [NotMapped]
+    private readonly List<ExpenseItem> _items = new(8);
 
-    private readonly List<Payment> _payments = new();
+    private readonly List<Payment> _payments = new(4);
+
+    public IReadOnlyCollection<ExpenseItem> Items => _items.AsReadOnly();
     public IReadOnlyCollection<Payment> Payments => _payments.AsReadOnly();
 
     /// <summary>Total da despesa = soma dos itens. Persistido como coluna calculada via <c>HasComputedColumnSql</c>.</summary>
     public decimal TotalAmount { get; private set; }
 
-    /// <summary>Total já pago (exclui pagamentos estornados).</summary>
+    /// <summary>Total já pago (exclui pagamentos estornados). Usa inteiros para precisão monetária.</summary>
     public decimal TotalPaid => _payments.Where(p => !p.IsRefunded).Sum(p => p.Amount);
 
     /// <summary>Saldo a pagar.</summary>
@@ -120,8 +124,8 @@ public sealed class Expense : IAuditableEntity
             Description = description.Trim(),
             Category = category.Trim(),
             Currency = string.IsNullOrWhiteSpace(currency) ? "BRL" : currency.Trim().ToUpperInvariant(),
-            IssueDate = issueDate,
-            DueDate = dueDate,
+            IssueDate = NormalizeToUtc(issueDate),
+            DueDate = NormalizeToUtc(dueDate),
             ProcessingStatus = processing,
             ApprovalStatus = ExpenseApprovalStatus.PendingApproval,
             SettlementStatus = ExpenseSettlementStatus.Unpaid,
@@ -388,4 +392,16 @@ public sealed class Expense : IAuditableEntity
         if (DeletedAt.HasValue)
             throw new DomainException("Despesa excluída não pode ser modificada.");
     }
+
+    /// <summary>Datas de documento (emissão/vencimento) chegam como Unspecified ou Local; PostgreSQL timestamptz exige UTC.</summary>
+    private static DateTime NormalizeToUtc(DateTime value) =>
+        value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+        };
+
+    private static DateTime? NormalizeToUtc(DateTime? value) =>
+        value.HasValue ? NormalizeToUtc(value.Value) : null;
 }
