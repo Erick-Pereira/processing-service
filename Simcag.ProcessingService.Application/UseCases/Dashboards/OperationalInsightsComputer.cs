@@ -1,6 +1,7 @@
 using System.Globalization;
 using MediatR;
 using Simcag.ProcessingService.Application.DTOs;
+using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.ReadModel.Models;
 
 namespace Simcag.ProcessingService.Application.UseCases.Dashboards;
@@ -9,10 +10,15 @@ namespace Simcag.ProcessingService.Application.UseCases.Dashboards;
 public static class OperationalInsightsComputer
 {
     private const string MvSource = "mv_monthly_expense_summary (processing read model)";
+    private const string BenchmarkSource = "catálogo de produtos (benchmark price-analysis)";
     private const decimal CategoryShareWarningThreshold = 0.40m;
     private const decimal MonthOverMonthWarningThreshold = 0.20m;
+    private const decimal MarketDeviationInsightThreshold = 20m;
 
-    public static async Task<OperationalInsightsEnvelope> ComputeAsync(IMediator mediator, CancellationToken ct)
+    public static async Task<OperationalInsightsEnvelope> ComputeAsync(
+        IMediator mediator,
+        IProductRepository products,
+        CancellationToken ct)
     {
         var now = DateTime.UtcNow.Date;
         var items = new List<OperationalInsightDto>();
@@ -25,11 +31,53 @@ public static class OperationalInsightsComputer
         var yoy = await mediator.Send(new GetYearOverYearQuery(2), ct);
         TryAddMonthOverMonthSpend(yoy, items);
 
+        await TryAddMarketPriceDeviationsAsync(products, items, ct);
+
         return new OperationalInsightsEnvelope
         {
             GeneratedAtUtc = DateTime.UtcNow,
             Items = items
         };
+    }
+
+    private static async Task TryAddMarketPriceDeviationsAsync(
+        IProductRepository products,
+        List<OperationalInsightDto> sink,
+        CancellationToken ct)
+    {
+        var rows = await products.ListTopMarketDeviationsAsync(MarketDeviationInsightThreshold, take: 5, ct);
+        foreach (var row in rows)
+        {
+            var slug = Slug(row.ProductName);
+            var severity = row.MarketDeviationPercentage >= 50m ? "warning" : "info";
+            sink.Add(new OperationalInsightDto
+            {
+                Id = $"insight-market-deviation-{slug}-{row.BenchmarkAt:yyyyMMdd}",
+                Kind = "market-price-deviation",
+                Title = "Desvio de preço face ao mercado",
+                Summary =
+                    $"«{row.ProductName}» foi registado a {row.LastPrice:C} vs benchmark de mercado {row.MarketBenchmarkPrice:C} (+{row.MarketDeviationPercentage:F1}%).",
+                Severity = severity,
+                Confidence = "high",
+                PrimaryPeriod = new OperationalInsightPeriodDto
+                {
+                    FromInclusive = row.BenchmarkAt.Date,
+                    ToInclusive = row.BenchmarkAt.Date
+                },
+                ComparePeriod = null,
+                DataSources = new[] { BenchmarkSource },
+                Criteria =
+                    $"Emitido quando MarketDeviationPercentage ≥ {MarketDeviationInsightThreshold}% após análise de preço (price-analysis).",
+                Evidence = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["productName"] = row.ProductName,
+                    ["lastPriceBrl"] = row.LastPrice.ToString("F2", CultureInfo.InvariantCulture),
+                    ["marketBenchmarkBrl"] = row.MarketBenchmarkPrice.ToString("F2", CultureInfo.InvariantCulture),
+                    ["deviationPercent"] = row.MarketDeviationPercentage.ToString("F1", CultureInfo.InvariantCulture),
+                    ["benchmarkAtUtc"] = row.BenchmarkAt.ToString("O", CultureInfo.InvariantCulture)
+                }
+            });
+        }
     }
 
     private static void TryAddCategoryConcentration(

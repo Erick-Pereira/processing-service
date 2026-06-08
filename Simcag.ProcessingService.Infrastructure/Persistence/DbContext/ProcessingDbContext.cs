@@ -71,6 +71,11 @@ public class ProcessingDbContext : DbContext
             entity.Property(p => p.Price).HasColumnType("decimal(18,2)");
             entity.Property(p => p.Source).IsRequired().HasMaxLength(100);
             entity.Property(p => p.Category).HasMaxLength(200);
+            entity.Property(p => p.CatalogNormalizedName).IsRequired().HasMaxLength(500);
+            entity.Property(p => p.MarketBenchmarkPrice).HasColumnType("decimal(18,2)");
+            entity.Property(p => p.MarketDeviationPercentage).HasColumnType("decimal(10,2)");
+            entity.Property(p => p.BenchmarkSource).HasMaxLength(200);
+            entity.HasIndex(p => new { p.CatalogNormalizedName, p.Source });
             entity.HasIndex(p => new { p.ExternalId, p.Source }).IsUnique();
             entity.Property(p => p.CreatedAt).HasDefaultValueSql("NOW()");
             entity.Property(p => p.UpdatedAt).HasDefaultValueSql("NOW()");

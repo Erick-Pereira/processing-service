@@ -14,18 +14,32 @@ namespace Simcag.ProcessingService.Domain.Entities
         public string Source { get; private set; } = null!;
         public string? Category { get; private set; }
         public DateTime CollectionDate { get; private set; }
+        public decimal? MarketBenchmarkPrice { get; private set; }
+        public decimal? MarketDeviationPercentage { get; private set; }
+        public string? BenchmarkSource { get; private set; }
+        public DateTime? LastBenchmarkAt { get; private set; }
+        /// <summary>Chave de agrupamento do catálogo (mesma regra que <c>ListProductCatalog</c>).</summary>
+        public string CatalogNormalizedName { get; private set; } = string.Empty;
         public DateTime CreatedAt { get; private set; }
         public DateTime UpdatedAt { get; private set; }
 
         // EF Core constructor
         protected Product() { }
 
-        private Product(string externalId, string name, decimal price, string source, string? category, DateTime collectionDate)
+        private Product(
+            string externalId,
+            string name,
+            decimal price,
+            string source,
+            string? category,
+            DateTime collectionDate,
+            string catalogNormalizedName)
         {
             Id = Guid.NewGuid();
             ExternalId = externalId;
             Name = name;
             NormalizedName = NormalizeName(name);
+            CatalogNormalizedName = catalogNormalizedName;
             Price = price;
             Source = source;
             Category = category;
@@ -36,22 +50,53 @@ namespace Simcag.ProcessingService.Domain.Entities
             Validate();
         }
 
-        public static Product Create(string externalId, string name, decimal price, string source, string? category, DateTime collectionDate)
+        public static Product Create(
+            string externalId,
+            string name,
+            decimal price,
+            string source,
+            string? category,
+            DateTime collectionDate,
+            string catalogNormalizedName)
         {
-            return new Product(externalId, name, price, source, category, collectionDate);
+            return new Product(externalId, name, price, source, category, collectionDate, catalogNormalizedName);
         }
 
-        public void Update(string name, decimal price, string source, string? category, DateTime collectionDate)
+        public void Update(
+            string name,
+            decimal price,
+            string source,
+            string? category,
+            DateTime collectionDate,
+            string catalogNormalizedName)
         {
             Name = name;
             NormalizedName = NormalizeName(name);
+            CatalogNormalizedName = catalogNormalizedName;
             Price = price;
             Source = source;
             Category = category;
             CollectionDate = collectionDate;
             UpdatedAt = DateTime.UtcNow;
-            
+
             Validate();
+        }
+
+        /// <summary>Atualiza benchmark de mercado quando a análise de preço retorna referência externa válida.</summary>
+        public void UpdateMarketBenchmark(
+            decimal marketBenchmarkPrice,
+            decimal marketDeviationPercentage,
+            string? benchmarkSource,
+            DateTime benchmarkAt)
+        {
+            if (marketBenchmarkPrice <= 0m)
+                throw new InvalidOperationException("Benchmark de mercado deve ser maior que zero.");
+
+            MarketBenchmarkPrice = marketBenchmarkPrice;
+            MarketDeviationPercentage = marketDeviationPercentage;
+            BenchmarkSource = string.IsNullOrWhiteSpace(benchmarkSource) ? null : benchmarkSource.Trim();
+            LastBenchmarkAt = benchmarkAt;
+            UpdatedAt = DateTime.UtcNow;
         }
 
         /// <summary>Normalização alinhada à coluna <c>NormalizedName</c> (dedupe / catálogo).</summary>

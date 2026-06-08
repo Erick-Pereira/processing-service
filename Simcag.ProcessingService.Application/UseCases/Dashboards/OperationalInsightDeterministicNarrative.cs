@@ -30,6 +30,7 @@ public static class OperationalInsightDeterministicNarrative
         {
             "category-spend-concentration" => EnrichCategoryConcentration(x),
             "month-over-month-total-spend" => EnrichMonthOverMonth(x),
+            "market-price-deviation" => EnrichMarketPriceDeviation(x),
             _ => EnrichGeneric(x)
         };
 
@@ -144,6 +145,43 @@ public static class OperationalInsightDeterministicNarrative
             {
                 new OperationalInsightLinkDto { Label = "Compras", Href = "/compras" },
                 new OperationalInsightLinkDto { Label = "Alertas", Href = "/alertas" },
+                new OperationalInsightLinkDto { Label = "Insights (recalcular)", Href = "/insights" }
+            });
+    }
+
+    private static OperationalInsightDto EnrichMarketPriceDeviation(OperationalInsightDto x)
+    {
+        var product = x.Evidence.GetValueOrDefault("productName", "—");
+        var devStr = x.Evidence.GetValueOrDefault("deviationPercent", "0");
+        _ = decimal.TryParse(devStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var dev);
+        var impact = (int)Math.Clamp(Math.Round(Math.Abs(dev)), 0, 100);
+        var tier = dev >= 50m ? "critical" : dev >= 30m ? "attention" : "info";
+        var origin = "Benchmark de mercado obtido após upload e análise de preço (price-analysis).";
+        var simple =
+            $"O produto «{product}» está significativamente acima do preço de referência de mercado (+{dev:F0}%) — confirme se o valor da NF está correcto.";
+        var detailed =
+            $"{x.Summary} {origin} Desvios elevados podem indicar superfaturamento ou diferença de especificação do item.";
+        var why = "Comparar com o mercado reduz risco de pagar acima do valor usual na categoria.";
+        var rec = "Validar a NF, consultar outros fornecedores e registar justificativa se o preço for legítimo.";
+        var act = "Abrir Alertas e o catálogo de produtos para rever histórico e variações.";
+        return CloneWith(
+            x,
+            uiGroup: "price",
+            tier: tier,
+            impactScore: impact,
+            simple: simple,
+            detailed: detailed,
+            why: why,
+            recommendation: rec,
+            suggested: act,
+            originLabel: origin,
+            benchmark: "Referência: média/benchmark externo via market-data-service.",
+            compliance: "Desvios persistentes podem gerar alertas automáticos de superfaturamento.",
+            anomaly: dev >= 50m ? "Desvio acentuado face ao mercado — priorize revisão." : "",
+            links: new[]
+            {
+                new OperationalInsightLinkDto { Label = "Alertas", Href = "/alertas" },
+                new OperationalInsightLinkDto { Label = "Produtos", Href = "/produtos" },
                 new OperationalInsightLinkDto { Label = "Insights (recalcular)", Href = "/insights" }
             });
     }

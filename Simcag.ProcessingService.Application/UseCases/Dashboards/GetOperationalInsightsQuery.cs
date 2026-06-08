@@ -24,17 +24,20 @@ public sealed class GetOperationalInsightsHandler : IRequestHandler<GetOperation
 
     private readonly IMediator _mediator;
     private readonly IOperationalInsightSnapshotRepository _snapshots;
+    private readonly IProductRepository _products;
     private readonly ITenantContext _tenant;
     private readonly IOptions<InsightSnapshotOptions> _options;
 
     public GetOperationalInsightsHandler(
         IMediator mediator,
         IOperationalInsightSnapshotRepository snapshots,
+        IProductRepository products,
         ITenantContext tenant,
         IOptions<InsightSnapshotOptions> options)
     {
         _mediator = mediator;
         _snapshots = snapshots;
+        _products = products;
         _tenant = tenant;
         _options = options;
     }
@@ -62,7 +65,7 @@ public sealed class GetOperationalInsightsHandler : IRequestHandler<GetOperation
             }
         }
 
-        var computed = await OperationalInsightsComputer.ComputeAsync(_mediator, ct);
+        var computed = await OperationalInsightsComputer.ComputeAsync(_mediator, _products, ct);
         computed.RuleSetVersion = opts.RuleSetVersion;
         computed.ServedFrom = "live";
         computed = OperationalInsightDeterministicNarrative.Apply(computed);

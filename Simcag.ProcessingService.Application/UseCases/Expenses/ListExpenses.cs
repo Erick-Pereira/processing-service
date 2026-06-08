@@ -26,7 +26,13 @@ public sealed record ListExpensesQuery(
 public sealed class ListExpensesHandler : IRequestHandler<ListExpensesQuery, PagedResult<ExpenseListItemDto>>
 {
     private readonly IExpenseRepository _expenses;
-    public ListExpensesHandler(IExpenseRepository expenses) => _expenses = expenses;
+    private readonly ISupplierRepository _suppliers;
+
+    public ListExpensesHandler(IExpenseRepository expenses, ISupplierRepository suppliers)
+    {
+        _expenses = expenses;
+        _suppliers = suppliers;
+    }
 
     public async Task<PagedResult<ExpenseListItemDto>> Handle(ListExpensesQuery q, CancellationToken ct)
     {
@@ -45,15 +51,19 @@ public sealed class ListExpensesHandler : IRequestHandler<ListExpensesQuery, Pag
             includePayments: false,
             ct);
 
+        var supplierNames = await _suppliers.GetNamesByIdsAsync(items.Select(e => e.SupplierId), ct)
+            .ConfigureAwait(false);
+
         return new PagedResult<ExpenseListItemDto>(
-            items.Select(Map).ToList(),
+            items.Select(e => Map(e, supplierNames.GetValueOrDefault(e.SupplierId))).ToList(),
             total, page, size);
     }
 
-    private static ExpenseListItemDto Map(Expense e) => new()
+    private static ExpenseListItemDto Map(Expense e, string? supplierName) => new()
     {
         Id = e.Id,
         SupplierId = e.SupplierId,
+        SupplierName = supplierName,
         Description = e.Description,
         Category = e.Category,
         IssueDate = e.IssueDate,

@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Simcag.ProcessingService.Api\Simcag.ProcessingService.Api.csproj" />
+    <ProjectReference Include="..\Simcag.ProcessingService.Application\Simcag.ProcessingService.Application.csproj" />
     <ProjectReference Include="..\Simcag.ProcessingService.Infrastructure\Simcag.ProcessingService.Infrastructure.csproj" />
   </ItemGroup>
 

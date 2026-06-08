@@ -713,6 +713,15 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("BenchmarkSource")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CatalogNormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<DateTime>("CollectionDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -725,6 +734,15 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("LastBenchmarkAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal?>("MarketBenchmarkPrice")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("MarketDeviationPercentage")
+                        .HasColumnType("decimal(10,2)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -750,6 +768,8 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
                         .HasDefaultValueSql("NOW()");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CatalogNormalizedName", "Source");
 
                     b.HasIndex("ExternalId", "Source")
                         .IsUnique();

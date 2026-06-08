@@ -28,6 +28,9 @@ public sealed class ProductCatalogItemDto
     public decimal MinUnitPrice { get; init; }
     public decimal MaxUnitPrice { get; init; }
     public decimal? VariationPercentage { get; init; }
+    public decimal? MarketBenchmarkPrice { get; init; }
+    public decimal? MarketDeviationPercentage { get; init; }
+    public DateTime? LastBenchmarkAt { get; init; }
     public DateTime FirstSeen { get; init; }
     public DateTime LastSeen { get; init; }
     public IReadOnlyList<ProductSupplierSummaryDto> Suppliers { get; init; } = Array.Empty<ProductSupplierSummaryDto>();

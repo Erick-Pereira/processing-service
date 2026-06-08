@@ -10,6 +10,8 @@ public interface ISupplierRepository
 {
     Task<Supplier?> GetByIdAsync(Guid id, CancellationToken ct = default);
 
+    Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(IEnumerable<Guid> ids, CancellationToken ct = default);
+
     Task<Supplier?> GetByDocumentAsync(string document, CancellationToken ct = default);
 
     Task<Supplier?> GetByNormalizedNameAsync(string normalizedName, CancellationToken ct = default);

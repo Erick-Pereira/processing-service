@@ -118,6 +118,8 @@ public static class ExpenseOperationalSnapshotBuilder
                 parts.Add($"Produto: {pn.GetString()}");
             if (r.TryGetProperty("deviationPercentage", out var dev) && dev.ValueKind == JsonValueKind.Number)
                 parts.Add($"Desvio: {dev.GetDecimal():0.#}%");
+            if (r.TryGetProperty("marketAverage", out var mkt) && mkt.ValueKind == JsonValueKind.Number && mkt.GetDecimal() > 0m)
+                parts.Add($"Mercado: R$ {mkt.GetDecimal():0.##}");
             if (r.TryGetProperty("processingAfter", out var pa))
                 parts.Add($"Pipeline → {pa.GetString()}");
             return parts.Count == 0 ? Truncate(json, 300) : string.Join(" · ", parts);

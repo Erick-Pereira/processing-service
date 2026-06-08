@@ -23,10 +23,14 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
     private const int SuppliersLimit = 5;
 
     private readonly IProductCatalogQueryRepository _catalog;
+    private readonly IProductRepository _products;
 
-    public ListProductCatalogHandler(IProductCatalogQueryRepository catalog)
+    public ListProductCatalogHandler(
+        IProductCatalogQueryRepository catalog,
+        IProductRepository products)
     {
         _catalog = catalog;
+        _products = products;
     }
 
     public async Task<ProductCatalogResultDto> Handle(ListProductCatalogQuery request, CancellationToken ct)
@@ -46,13 +50,23 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
             ct);
 
         var limitedRows = sourceRows.Take(maxSourceRows).ToList();
-        var groups = limitedRows
+        var grouped = limitedRows
             .GroupBy(row => new
             {
-                NormalizedName = NormalizeProductName(row.Description),
+                NormalizedName = ProductCatalogNormalizer.Normalize(row.Description),
                 Category = string.IsNullOrWhiteSpace(row.Category) ? "Sem categoria" : row.Category.Trim(),
             })
-            .Select(group => BuildCatalogItem(group.Key.NormalizedName, group.Key.Category, group))
+            .ToList();
+
+        var catalogKeys = grouped.Select(g => g.Key.NormalizedName).Distinct(StringComparer.OrdinalIgnoreCase);
+        var benchmarks = await _products.GetLatestBenchmarksByCatalogKeysAsync(catalogKeys, ct);
+
+        var groups = grouped
+            .Select(group =>
+            {
+                benchmarks.TryGetValue(group.Key.NormalizedName, out var benchmark);
+                return BuildCatalogItem(group.Key.NormalizedName, group.Key.Category, group, benchmark);
+            })
             .OrderByDescending(item => item.LastSeen)
             .ThenBy(item => item.DisplayName)
             .ToList();
@@ -71,7 +85,8 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
     private static ProductCatalogItemDto BuildCatalogItem(
         string normalizedName,
         string category,
-        IEnumerable<ProductCatalogSourceRow> rows)
+        IEnumerable<ProductCatalogSourceRow> rows,
+        ProductBenchmarkSnapshot? benchmark)
     {
         var orderedRows = rows
             .OrderByDescending(row => row.IssueDate)
@@ -83,7 +98,7 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
 
         return new ProductCatalogItemDto
         {
-            ProductKey = $"{normalizedName}|{NormalizeProductName(category)}",
+            ProductKey = $"{normalizedName}|{ProductCatalogNormalizer.Normalize(category)}",
             DisplayName = SelectDisplayName(orderedRows),
             NormalizedName = normalizedName,
             Category = category,
@@ -98,6 +113,9 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
             VariationPercentage = minUnitPrice > 0m
                 ? Math.Round(((maxUnitPrice - minUnitPrice) / minUnitPrice) * 100m, 2)
                 : null,
+            MarketBenchmarkPrice = benchmark?.MarketBenchmarkPrice,
+            MarketDeviationPercentage = benchmark?.MarketDeviationPercentage,
+            LastBenchmarkAt = benchmark?.BenchmarkAt,
             FirstSeen = orderedRows.Min(row => row.IssueDate),
             LastSeen = orderedRows.Max(row => row.IssueDate),
             Suppliers = orderedRows
@@ -157,21 +175,5 @@ public sealed class ListProductCatalogHandler : IRequestHandler<ListProductCatal
             .Select(group => group.Key)
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
             ?? "Produto sem descrição";
-    }
-
-    private static string NormalizeProductName(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "sem-descricao";
-
-        var withoutAccents = new StringBuilder(value.Length);
-        foreach (var ch in value.Trim().Normalize(NormalizationForm.FormD))
-        {
-            if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
-                withoutAccents.Append(ch);
-        }
-
-        var compact = Regex.Replace(withoutAccents.ToString().ToUpperInvariant(), @"[^A-Z0-9]+", "-");
-        return Regex.Replace(compact, @"-+", "-").Trim('-').ToLowerInvariant();
     }
 }

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.Messaging;
+using Simcag.ProcessingService.Application.UseCases.Products;
 using Simcag.ProcessingService.Domain.Entities;
 using Simcag.ProcessingService.Domain.Enums;
 using Simcag.ProcessingService.Infrastructure.Persistence;
@@ -192,13 +193,30 @@ public sealed class PriceAnalyzedConsumer : BackgroundService
                 expense.BeginPriceBenchmark();
                 try
                 {
+                    var productName = string.IsNullOrWhiteSpace(evt.ProductName)
+                        ? evt.ProductId.Trim()
+                        : evt.ProductName.Trim();
+                    var catalogKey = ProductCatalogNormalizer.Normalize(productName);
+
+                    ProductBenchmarkSnapshot? benchmark = null;
+                    if (evt.MarketAverage > 0m)
+                    {
+                        benchmark = new ProductBenchmarkSnapshot(
+                            evt.MarketAverage,
+                            evt.DeviationPercentage,
+                            "price-analysis",
+                            evt.AnalysisDate == default ? DateTime.UtcNow : evt.AnalysisDate);
+                    }
+
                     await products.UpsertByExternalIdAsync(
                         externalId: evt.ProductId.Trim(),
                         source: "price-analysis",
-                        name: string.IsNullOrWhiteSpace(evt.ProductName) ? evt.ProductId.Trim() : evt.ProductName.Trim(),
+                        name: productName,
                         price: evt.LastPrice,
                         category: string.IsNullOrWhiteSpace(evt.Category) ? null : evt.Category.Trim(),
-                        ct).ConfigureAwait(false);
+                        catalogNormalizedName: catalogKey,
+                        benchmark: benchmark,
+                        ct: ct).ConfigureAwait(false);
                     cataloguePersisted = true;
                 }
                 catch (Exception ex)

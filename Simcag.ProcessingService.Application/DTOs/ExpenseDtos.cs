@@ -44,6 +44,9 @@ public class ExpenseListItemDto
 
     public bool LowConfidence { get; set; }
 
+    /// <summary>Nome do fornecedor (join na listagem).</summary>
+    public string? SupplierName { get; set; }
+
     public string Currency { get; set; } = "BRL";
     public decimal TotalAmount { get; set; }
 }
@@ -57,7 +60,6 @@ public sealed class ExpenseDetailDto : ExpenseListItemDto
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public Guid? RawDocumentId { get; set; }
-    public string? SupplierName { get; set; }
     public IReadOnlyList<ExpenseItemDto> Items { get; set; } = Array.Empty<ExpenseItemDto>();
     public IReadOnlyList<PaymentDto> Payments { get; set; } = Array.Empty<PaymentDto>();
 

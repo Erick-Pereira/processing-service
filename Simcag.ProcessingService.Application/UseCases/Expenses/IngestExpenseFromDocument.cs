@@ -137,7 +137,7 @@ public sealed class IngestExpenseFromDocumentHandler
         // Sempre cria pelo menos 1 ExpenseItem (invariante: aprovação requer items).
         if (structuredLines.Count > 0)
         {
-            var sumLines = structuredLines.Sum(l => l.UnitPrice);
+            var sumLines = structuredLines.Sum(l => l.Amount);
             if (sumLines <= 0m && fallbackAmount > 0m)
             {
                 expense.AddItem(description, quantity: 1m, unitPrice: fallbackAmount);
@@ -145,7 +145,11 @@ public sealed class IngestExpenseFromDocumentHandler
             else
             {
                 foreach (var line in structuredLines)
-                    expense.AddItem(line.Description, quantity: 1m, unitPrice: line.UnitPrice);
+                {
+                    var qty = line.Quantity is > 0m ? line.Quantity : 1m;
+                    var unit = line.UnitPrice ?? (qty > 0m ? Math.Round(line.Amount / qty, 4, MidpointRounding.AwayFromZero) : line.Amount);
+                    expense.AddItem(line.Description, quantity: qty, unitPrice: unit);
+                }
             }
         }
         else
@@ -204,7 +208,7 @@ public sealed class IngestExpenseFromDocumentHandler
     private static (string description, string category) RefineAggregateFromStructuredLines(
         string description,
         string category,
-        List<(string Description, decimal UnitPrice)> lines,
+        List<(string Description, decimal Amount, decimal Quantity, decimal? UnitPrice)> lines,
         string documentType)
     {
         if (lines.Count == 0)
@@ -229,7 +233,7 @@ public sealed class IngestExpenseFromDocumentHandler
     }
 
     private static string BuildHumanReadableExpenseTitle(
-        List<(string Description, decimal UnitPrice)> lines,
+        List<(string Description, decimal Amount, decimal Quantity, decimal? UnitPrice)> lines,
         string documentType)
     {
         var docLabel = documentType.Contains("BALANCE", StringComparison.OrdinalIgnoreCase)
@@ -245,7 +249,7 @@ public sealed class IngestExpenseFromDocumentHandler
     private const int MaxExpenseCategoryLength = 120;
 
     private static string InferExpenseCategoryFromLines(
-        List<(string Description, decimal UnitPrice)> lines,
+        List<(string Description, decimal Amount, decimal Quantity, decimal? UnitPrice)> lines,
         string documentType,
         string fallback)
     {
@@ -304,13 +308,13 @@ public sealed class IngestExpenseFromDocumentHandler
 
     private const int MaxItemDescriptionLength = 500;
 
-    private static List<(string Description, decimal UnitPrice)> NormalizeStructuredLines(
+    private static List<(string Description, decimal Amount, decimal Quantity, decimal? UnitPrice)> NormalizeStructuredLines(
         IReadOnlyList<IngestedExpenseLine>? lines)
     {
         if (lines is null || lines.Count == 0)
             return [];
 
-        var list = new List<(string Description, decimal UnitPrice)>();
+        var list = new List<(string Description, decimal Amount, decimal Quantity, decimal? UnitPrice)>();
         foreach (var line in lines)
         {
             if (string.IsNullOrWhiteSpace(line.Description))
@@ -319,7 +323,8 @@ public sealed class IngestExpenseFromDocumentHandler
             if (desc.Length > MaxItemDescriptionLength)
                 desc = desc[..MaxItemDescriptionLength];
             var price = line.Amount < 0m ? 0m : line.Amount;
-            list.Add((desc, price));
+            var qty = line.Quantity is > 0m ? line.Quantity.Value : 1m;
+            list.Add((desc, price, qty, line.UnitPrice));
         }
 
         return list;
