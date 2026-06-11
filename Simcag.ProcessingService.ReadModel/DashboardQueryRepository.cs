@@ -103,6 +103,7 @@ WITH scheduled AS (
     FROM expenses e
     WHERE e.tenant_id = @TenantId
       AND e.deleted_at IS NULL
+      AND e.approval_status NOT IN (3, 4)
       AND e.due_date IS NOT NULL
       AND e.due_date BETWEEN @From AND @To
     GROUP BY 1, 2
@@ -145,6 +146,31 @@ ORDER BY year, month;";
         var rows = await conn.QueryAsync<YearOverYearRow>(
             new CommandDefinition(sql, new { TenantId = _tenant.TenantId, YearsBack = yearsBack }, cancellationToken: ct));
         return rows.AsList();
+    }
+
+    public async Task<decimal> GetYearOutstandingLiveAsync(int year, CancellationToken ct = default)
+    {
+        const string sql = @"
+WITH paid AS (
+    SELECT p.expense_id, COALESCE(SUM(p.amount), 0) AS amount_paid
+    FROM payments p
+    WHERE p.tenant_id = @TenantId AND p.is_refunded = FALSE
+    GROUP BY p.expense_id
+)
+SELECT COALESCE(SUM(
+    CASE
+        WHEN e.approval_status IN (3, 4) THEN 0
+        ELSE GREATEST(e.total_amount - COALESCE(paid.amount_paid, 0), 0)
+    END
+), 0)
+FROM expenses e
+LEFT JOIN paid ON paid.expense_id = e.id
+WHERE e.tenant_id = @TenantId
+  AND e.deleted_at IS NULL
+  AND EXTRACT(YEAR FROM e.issue_date)::int = @Year;";
+        await using var conn = Open();
+        return await conn.ExecuteScalarAsync<decimal>(
+            new CommandDefinition(sql, new { TenantId = _tenant.TenantId, Year = year }, cancellationToken: ct));
     }
 
     public async Task RefreshMonthlyExpenseSummaryAsync(CancellationToken ct = default)

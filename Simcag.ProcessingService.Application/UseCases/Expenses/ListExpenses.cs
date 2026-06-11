@@ -78,6 +78,8 @@ public sealed class ListExpensesHandler : IRequestHandler<ListExpensesQuery, Pag
         LowConfidence = e.LowConfidence,
         Currency = e.Currency,
         TotalAmount = e.TotalAmount,
+        CreatedAt = e.CreatedAt,
+        UpdatedAt = e.UpdatedAt,
     };
 }
 
@@ -119,6 +121,7 @@ public sealed class GetExpenseByIdHandler : IRequestHandler<GetExpenseByIdQuery,
         var auditsChrono = auditItems.OrderBy(a => a.CreatedAt).ToList();
         var timeline = ExpenseOperationalSnapshotBuilder.BuildTimeline(e, auditsChrono);
         var governance = ExpenseOperationalSnapshotBuilder.BuildGovernance(e);
+        var priceAnalyses = ExpensePriceAnalysisBuilder.BuildFromAudits(auditsChrono);
 
         return new ExpenseDetailDto
         {
@@ -166,6 +169,7 @@ public sealed class GetExpenseByIdHandler : IRequestHandler<GetExpenseByIdQuery,
             }).ToList(),
             OperationalTimeline = timeline,
             Governance = governance,
+            PriceAnalyses = priceAnalyses,
         };
     }
 }

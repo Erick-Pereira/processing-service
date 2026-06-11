@@ -39,7 +39,7 @@ public sealed class GetDashboardSummaryHandler : IRequestHandler<GetDashboardSum
         var totalAmount = rows.Sum(r => r.TotalAmount);
         var totalExpenseLines = rows.Sum(r => r.ExpenseCount);
         var supplierIds = new HashSet<Guid>(rows.Select(r => r.SupplierId).Where(id => id != Guid.Empty));
-        var outstanding = rows.Sum(r => r.Outstanding);
+        var outstanding = await _dashboard.GetYearOutstandingLiveAsync(y, cancellationToken).ConfigureAwait(false);
 
         return new DashboardSummaryDto(
             Year: y,

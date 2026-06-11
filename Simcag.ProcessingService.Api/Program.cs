@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Simcag.ProcessingService.Api.ExceptionHandling;
 using Simcag.ProcessingService.Api.Workers;
 using Simcag.ProcessingService.Application.Configuration;
+using Simcag.ProcessingService.Application.Dashboard;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.UseCases.Expenses;
 using Simcag.ProcessingService.Infrastructure;
@@ -48,7 +49,7 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.OpenApiInfo { Title = "SIMC-AG Processing", Version = "v1" });
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.OpenApiInfo { Title = "Econdomiza - Processing", Version = "v1" });
     c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -152,6 +153,7 @@ builder.Services.AddProcessingTransactionalOutbox();
 
 builder.Services.AddScoped<IDashboardQueryRepository>(sp =>
     new DashboardQueryRepository(connectionString, sp.GetRequiredService<ITenantContext>()));
+builder.Services.AddScoped<IDashboardReadModelRefresher, DashboardReadModelRefresher>();
 builder.Services.AddScoped<ISupplierQualityReadModel>(sp =>
     new SupplierQualityReadRepository(connectionString, sp.GetRequiredService<ITenantContext>()));
 

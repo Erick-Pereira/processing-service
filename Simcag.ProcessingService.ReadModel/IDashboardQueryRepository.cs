@@ -23,5 +23,8 @@ public interface IDashboardQueryRepository
 
     Task<IReadOnlyList<YearOverYearRow>> GetYearOverYearAsync(int yearsBack, CancellationToken ct = default);
 
+    /// <summary>Saldo em aberto do ano (live, exclui canceladas/rejeitadas).</summary>
+    Task<decimal> GetYearOutstandingLiveAsync(int year, CancellationToken ct = default);
+
     Task RefreshMonthlyExpenseSummaryAsync(CancellationToken ct = default);
 }

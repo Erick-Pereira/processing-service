@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
 using MediatR;
+using Simcag.ProcessingService.Application.Dashboard;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Enums;
 using Simcag.ProcessingService.Domain.Exceptions;
@@ -29,10 +30,16 @@ public sealed class RegisterPaymentHandler : IRequestHandler<RegisterPaymentComm
 {
     private readonly IExpenseRepository _expenses;
     private readonly IPaymentRepository _payments;
-    public RegisterPaymentHandler(IExpenseRepository expenses, IPaymentRepository payments)
+    private readonly IDashboardReadModelRefresher _dashboardRefresh;
+
+    public RegisterPaymentHandler(
+        IExpenseRepository expenses,
+        IPaymentRepository payments,
+        IDashboardReadModelRefresher dashboardRefresh)
     {
         _expenses = expenses;
         _payments = payments;
+        _dashboardRefresh = dashboardRefresh;
     }
 
     public async Task<Guid> Handle(RegisterPaymentCommand request, CancellationToken ct)
@@ -42,6 +49,7 @@ public sealed class RegisterPaymentHandler : IRequestHandler<RegisterPaymentComm
         var payment = expense.RegisterPayment(request.Amount, request.PaymentDate, request.Method, request.ReferenceCode);
         await _payments.AddAsync(payment, ct);
         await _expenses.SaveChangesAsync(ct);
+        await _dashboardRefresh.RefreshAfterExpenseMutationAsync(ct);
         return payment.Id;
     }
 }
@@ -61,7 +69,13 @@ public sealed class RefundPaymentValidator : AbstractValidator<RefundPaymentComm
 public sealed class RefundPaymentHandler : IRequestHandler<RefundPaymentCommand>
 {
     private readonly IExpenseRepository _expenses;
-    public RefundPaymentHandler(IExpenseRepository expenses) => _expenses = expenses;
+    private readonly IDashboardReadModelRefresher _dashboardRefresh;
+
+    public RefundPaymentHandler(IExpenseRepository expenses, IDashboardReadModelRefresher dashboardRefresh)
+    {
+        _expenses = expenses;
+        _dashboardRefresh = dashboardRefresh;
+    }
 
     public async Task Handle(RefundPaymentCommand request, CancellationToken ct)
     {
@@ -69,5 +83,6 @@ public sealed class RefundPaymentHandler : IRequestHandler<RefundPaymentCommand>
             ?? throw new NotFoundException("Expense", request.ExpenseId);
         expense.RefundPayment(request.PaymentId, request.Reason);
         await _expenses.SaveChangesAsync(ct);
+        await _dashboardRefresh.RefreshAfterExpenseMutationAsync(ct);
     }
 }

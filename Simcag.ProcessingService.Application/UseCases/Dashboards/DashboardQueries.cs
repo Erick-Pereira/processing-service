@@ -14,8 +14,12 @@ public sealed class GetMonthlyDashboardHandler : IRequestHandler<GetMonthlyDashb
 {
     private readonly IDashboardQueryRepository _repo;
     public GetMonthlyDashboardHandler(IDashboardQueryRepository repo) => _repo = repo;
-    public Task<IReadOnlyList<MonthlyExpenseSummaryRow>> Handle(GetMonthlyDashboardQuery q, CancellationToken ct) =>
-        _repo.GetMonthlySummaryAsync(q.Year, ct);
+
+    public async Task<IReadOnlyList<MonthlyExpenseSummaryRow>> Handle(GetMonthlyDashboardQuery q, CancellationToken ct)
+    {
+        await _repo.RefreshMonthlyExpenseSummaryAsync(ct).ConfigureAwait(false);
+        return await _repo.GetMonthlySummaryAsync(q.Year, ct).ConfigureAwait(false);
+    }
 }
 
 public sealed record GetCategoryBreakdownQuery(DateTime From, DateTime To) : IRequest<IReadOnlyList<CategoryBreakdownRow>>;

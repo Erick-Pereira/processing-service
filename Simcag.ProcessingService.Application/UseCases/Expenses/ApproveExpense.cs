@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
 using MediatR;
+using Simcag.ProcessingService.Application.Dashboard;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Domain.Exceptions;
 
@@ -43,7 +44,13 @@ public sealed class RejectExpenseValidator : AbstractValidator<RejectExpenseComm
 public sealed class RejectExpenseHandler : IRequestHandler<RejectExpenseCommand>
 {
     private readonly IExpenseRepository _expenses;
-    public RejectExpenseHandler(IExpenseRepository expenses) => _expenses = expenses;
+    private readonly IDashboardReadModelRefresher _dashboardRefresh;
+
+    public RejectExpenseHandler(IExpenseRepository expenses, IDashboardReadModelRefresher dashboardRefresh)
+    {
+        _expenses = expenses;
+        _dashboardRefresh = dashboardRefresh;
+    }
 
     public async Task Handle(RejectExpenseCommand request, CancellationToken ct)
     {
@@ -51,6 +58,7 @@ public sealed class RejectExpenseHandler : IRequestHandler<RejectExpenseCommand>
             ?? throw new NotFoundException("Expense", request.Id);
         expense.Reject(request.Reason);
         await _expenses.SaveChangesAsync(ct);
+        await _dashboardRefresh.RefreshAfterExpenseMutationAsync(ct);
     }
 }
 
@@ -89,7 +97,13 @@ public sealed class CancelExpenseValidator : AbstractValidator<CancelExpenseComm
 public sealed class CancelExpenseHandler : IRequestHandler<CancelExpenseCommand>
 {
     private readonly IExpenseRepository _expenses;
-    public CancelExpenseHandler(IExpenseRepository expenses) => _expenses = expenses;
+    private readonly IDashboardReadModelRefresher _dashboardRefresh;
+
+    public CancelExpenseHandler(IExpenseRepository expenses, IDashboardReadModelRefresher dashboardRefresh)
+    {
+        _expenses = expenses;
+        _dashboardRefresh = dashboardRefresh;
+    }
 
     public async Task Handle(CancelExpenseCommand request, CancellationToken ct)
     {
@@ -97,5 +111,6 @@ public sealed class CancelExpenseHandler : IRequestHandler<CancelExpenseCommand>
             ?? throw new NotFoundException("Expense", request.Id);
         expense.Cancel(request.Reason);
         await _expenses.SaveChangesAsync(ct);
+        await _dashboardRefresh.RefreshAfterExpenseMutationAsync(ct);
     }
 }

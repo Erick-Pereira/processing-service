@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Simcag.ProcessingService.Application.Interfaces;
 using Simcag.ProcessingService.Application.Messaging;
+using Simcag.ProcessingService.Application.UseCases.Expenses;
 using Simcag.ProcessingService.Application.UseCases.Products;
 using Simcag.ProcessingService.Domain.Entities;
 using Simcag.ProcessingService.Domain.Enums;
@@ -182,6 +183,18 @@ public sealed class PriceAnalyzedConsumer : BackgroundService
                 return ProcessOutcome.Skip;
             }
 
+            if (expense.IsClosedForPipeline())
+            {
+                _log.LogInformation(
+                    "PriceAnalyzedEvent {EventId}: Expense {ExpenseId} encerrada ({Approval}); ignorando benchmark.",
+                    evt.EventId, expense.Id, expense.ApprovalStatus);
+                await inbox
+                    .MarkCompletedAsync(ProcessingConsumerGroups.PriceAnalyzed, envelope.MessageId, ct)
+                    .ConfigureAwait(false);
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                return ProcessOutcome.Skip;
+            }
+
             var processingBefore = expense.ProcessingStatus;
             var hasProductSignal = evt.LastPrice > 0m && !string.IsNullOrWhiteSpace(evt.ProductId);
             var cataloguePersisted = false;
@@ -235,6 +248,9 @@ public sealed class PriceAnalyzedConsumer : BackgroundService
                     evt.EventId, expense.Id, expense.ProcessingStatus);
             }
 
+            var reconciliation = ExpenseItemPriceReconciler.TryReconcile(evt, expense.Items.ToList());
+            var deviationForAudit = reconciliation?.CorrectedDeviationPercentage ?? evt.DeviationPercentage;
+
             var payload = JsonSerializer.Serialize(new
             {
                 evt.EventId,
@@ -242,13 +258,30 @@ public sealed class PriceAnalyzedConsumer : BackgroundService
                 evt.ProductName,
                 evt.Category,
                 evt.Severity,
-                evt.DeviationPercentage,
+                deviationPercentage = deviationForAudit,
                 evt.MarketAverage,
                 evt.LastPrice,
+                evt.Quantity,
+                evt.LineTotal,
+                nfUnitPrice = reconciliation?.NfUnitPrice,
+                nfQuantity = reconciliation?.NfQuantity,
+                nfLineTotal = reconciliation?.NfLineTotal,
+                priceAuditCorrected = reconciliation?.PriceAuditCorrected ?? false,
                 evt.HistoricalAverage,
                 evt.AnalysisDate,
                 evt.HasAnomalies,
                 evt.RawDocumentId,
+                evt.MarketSource,
+                evt.MarketBenchmarkKind,
+                evt.MarketBenchmarkStatus,
+                evt.MarketConfidence,
+                evt.MarketSampleCount,
+                evt.MarketRelativeSpread,
+                evt.MarketSearchQuery,
+                evt.MarketDocumentAnchorPrice,
+                marketEvidence = evt.MarketEvidence,
+                marketReferenceLinks = evt.MarketReferenceLinks,
+                marketSamples = evt.MarketSamples,
                 processingBefore = processingBefore.ToString(),
                 processingAfter = expense.ProcessingStatus.ToString(),
                 cataloguePersisted

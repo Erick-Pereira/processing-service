@@ -93,7 +93,7 @@ public static class ExpenseOperationalSnapshotBuilder
             });
         }
 
-        return list.OrderBy(x => x.At).ThenBy(x => x.Source == "audit" ? 1 : 0).ToList();
+        return list.OrderByDescending(x => x.At).ThenByDescending(x => x.Source == "audit" ? 1 : 0).ToList();
     }
 
     private static (string Title, string? Detail) DescribeAuditEntry(AuditLog a) =>
@@ -137,19 +137,71 @@ public static class ExpenseOperationalSnapshotBuilder
         return t.Length <= max ? t : t[..max] + "…";
     }
 
-    /// <summary>Catálogo completo de estados de processamento — destaca o atual (honestidade sobre ordem real).</summary>
+    /// <summary>Catálogo linear da pipeline — só etapas percorridas + atual (sem listar todo o enum).</summary>
     private static IReadOnlyList<ExpensePipelineStepDto> BuildProcessingCatalog(Expense e)
     {
-        var cur = e.ProcessingStatus;
-        return Enum.GetValues<ExpenseProcessingStatus>()
-            .Cast<ExpenseProcessingStatus>()
-            .Select(s => new ExpensePipelineStepDto
+        if (e.ProcessingStatus == ExpenseProcessingStatus.Failed)
+        {
+            return
+            [
+                new ExpensePipelineStepDto
+                {
+                    Code = nameof(ExpenseProcessingStatus.Failed),
+                    Label = HumanizeProcessing(ExpenseProcessingStatus.Failed),
+                    State = "current",
+                },
+            ];
+        }
+
+        if (e.ProcessingStatus == ExpenseProcessingStatus.PartiallyCompleted)
+        {
+            return
+            [
+                new ExpensePipelineStepDto
+                {
+                    Code = nameof(ExpenseProcessingStatus.PartiallyCompleted),
+                    Label = HumanizeProcessing(ExpenseProcessingStatus.PartiallyCompleted),
+                    State = "current",
+                },
+            ];
+        }
+
+        ExpenseProcessingStatus[] order =
+        [
+            ExpenseProcessingStatus.Received,
+            ExpenseProcessingStatus.Enriching,
+            ExpenseProcessingStatus.Persisting,
+            ExpenseProcessingStatus.Completed,
+            ExpenseProcessingStatus.Benchmarking,
+        ];
+
+        var curIdx = Array.IndexOf(order, e.ProcessingStatus);
+        if (curIdx < 0)
+        {
+            return
+            [
+                new ExpensePipelineStepDto
+                {
+                    Code = e.ProcessingStatus.ToString(),
+                    Label = HumanizeProcessing(e.ProcessingStatus),
+                    State = "current",
+                },
+            ];
+        }
+
+        var steps = new List<ExpensePipelineStepDto>(curIdx + 1);
+        for (var i = 0; i <= curIdx; i++)
+        {
+            var s = order[i];
+            steps.Add(new ExpensePipelineStepDto
             {
                 Code = s.ToString(),
                 Label = HumanizeProcessing(s),
-                State = s == cur ? "current" : "catalog",
-            })
-            .ToList();
+                State = i == curIdx ? "current" : "done",
+            });
+        }
+
+        return steps;
     }
 
     private static string HumanizeProcessing(ExpenseProcessingStatus s) =>
@@ -224,20 +276,56 @@ public static class ExpenseOperationalSnapshotBuilder
 
     private static ExpenseAllowedActionsDto BuildAllowedActions(Expense e)
     {
+        var hasActivePayments = e.Payments.Any(p => !p.IsRefunded);
+        var reasons = new Dictionary<string, string>();
+
         var canApprove = e.ApprovalStatus == ExpenseApprovalStatus.PendingApproval
                          && e.ProcessingStatus is ExpenseProcessingStatus.Completed or ExpenseProcessingStatus.PartiallyCompleted
                          && e.ProcessingStatus != ExpenseProcessingStatus.Failed
                          && e.Items.Count > 0;
+        if (!canApprove && e.ApprovalStatus == ExpenseApprovalStatus.PendingApproval)
+        {
+            if (e.ProcessingStatus == ExpenseProcessingStatus.Failed)
+                reasons["approve"] = "Processamento falhou — reinicie a pipeline ou cancele.";
+            else if (e.Items.Count == 0)
+                reasons["approve"] = "Adicione itens à despesa antes de aprovar.";
+            else if (e.ProcessingStatus is not (ExpenseProcessingStatus.Completed or ExpenseProcessingStatus.PartiallyCompleted))
+                reasons["approve"] = "Aguarde o processamento automático concluir.";
+        }
 
         var canReject = e.ApprovalStatus == ExpenseApprovalStatus.PendingApproval;
+        if (!canReject)
+            reasons["reject"] = "Disponível apenas enquanto a aprovação estiver pendente.";
 
         var canCancel = e.SettlementStatus != ExpenseSettlementStatus.Paid
-                        && e.ApprovalStatus != ExpenseApprovalStatus.Cancelled;
+                        && e.ApprovalStatus != ExpenseApprovalStatus.Cancelled
+                        && !hasActivePayments;
+        if (!canCancel)
+        {
+            if (e.ApprovalStatus == ExpenseApprovalStatus.Cancelled)
+                reasons["cancel"] = "Despesa já cancelada.";
+            else if (e.SettlementStatus == ExpenseSettlementStatus.Paid)
+                reasons["cancel"] = "Nota totalmente liquidada — use estorno em vez de cancelamento.";
+            else if (hasActivePayments)
+                reasons["cancel"] = "Estorne os pagamentos ativos antes de cancelar a nota.";
+        }
 
         var canRetry = e.ProcessingStatus == ExpenseProcessingStatus.Failed
-                       && e.ApprovalStatus != ExpenseApprovalStatus.Approved;
+                       && e.ApprovalStatus != ExpenseApprovalStatus.Approved
+                       && !e.IsClosedForPipeline();
+        if (!canRetry)
+        {
+            if (e.IsClosedForPipeline())
+                reasons["retryProcessing"] = "Despesa encerrada (cancelada ou rejeitada).";
+            else if (e.ApprovalStatus == ExpenseApprovalStatus.Approved)
+                reasons["retryProcessing"] = "Despesa já aprovada — retry não permitido.";
+            else if (e.ProcessingStatus != ExpenseProcessingStatus.Failed)
+                reasons["retryProcessing"] = "Reinício disponível somente após falha técnica (Failed).";
+        }
 
         var canPay = e.ApprovalStatus == ExpenseApprovalStatus.Approved && e.OutstandingBalance > 0.001m;
+        if (!canPay && e.ApprovalStatus == ExpenseApprovalStatus.Approved)
+            reasons["registerPayment"] = "Saldo em aberto zerado ou despesa encerrada.";
 
         var canRefund = e.ApprovalStatus == ExpenseApprovalStatus.Approved
                         && e.Payments.Any(p => !p.IsRefunded);
@@ -250,6 +338,7 @@ public static class ExpenseOperationalSnapshotBuilder
             RetryProcessing = canRetry,
             RegisterPayment = canPay,
             RefundPayment = canRefund,
+            DisabledReasons = reasons,
         };
     }
 }

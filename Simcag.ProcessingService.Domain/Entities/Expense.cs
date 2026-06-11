@@ -82,8 +82,11 @@ public sealed class Expense : IAuditableEntity
     /// <summary>Total já pago (exclui pagamentos estornados). Usa inteiros para precisão monetária.</summary>
     public decimal TotalPaid => _payments.Where(p => !p.IsRefunded).Sum(p => p.Amount);
 
-    /// <summary>Saldo a pagar.</summary>
-    public decimal OutstandingBalance => TotalAmount - TotalPaid;
+    /// <summary>Saldo a pagar. Despesas canceladas ou rejeitadas não geram compromisso financeiro em aberto.</summary>
+    public decimal OutstandingBalance =>
+        ApprovalStatus is ExpenseApprovalStatus.Cancelled or ExpenseApprovalStatus.Rejected
+            ? 0m
+            : TotalAmount - TotalPaid;
 
     private Expense() { }
 
@@ -169,6 +172,7 @@ public sealed class Expense : IAuditableEntity
     public void Approve()
     {
         EnsureMutable();
+        EnsureApprovalWorkflowOpen();
         if (ApprovalStatus != ExpenseApprovalStatus.PendingApproval)
             throw new DomainException("Apenas despesas em aprovação pendente podem ser aprovadas.");
         if (ProcessingStatus == ExpenseProcessingStatus.Failed)
@@ -188,6 +192,7 @@ public sealed class Expense : IAuditableEntity
     public void Reject(string reason)
     {
         EnsureMutable();
+        EnsureApprovalWorkflowOpen();
         if (string.IsNullOrWhiteSpace(reason))
             throw new DomainException("Motivo da rejeição é obrigatório.");
         if (ApprovalStatus != ExpenseApprovalStatus.PendingApproval)
@@ -201,10 +206,16 @@ public sealed class Expense : IAuditableEntity
     public void Cancel(string reason)
     {
         EnsureMutable();
+        EnsureApprovalWorkflowOpen();
         if (SettlementStatus == ExpenseSettlementStatus.Paid)
             throw new DomainException("Despesas já totalmente liquidadas não podem ser canceladas.");
+        if (_payments.Any(p => !p.IsRefunded))
+            throw new DomainException(
+                "Estorne ou regularize os pagamentos ativos antes de cancelar a nota fiscal.");
         if (string.IsNullOrWhiteSpace(reason))
             throw new DomainException("Motivo do cancelamento é obrigatório.");
+        if (ApprovalStatus == ExpenseApprovalStatus.Cancelled)
+            throw new DomainException("Despesa já está cancelada.");
 
         ApprovalStatus = ExpenseApprovalStatus.Cancelled;
         UpdatedAt = DateTime.UtcNow;
@@ -251,6 +262,9 @@ public sealed class Expense : IAuditableEntity
 
     public void ApplyProcessingTransition(ExpenseProcessingStatus to, string? failureReason = null)
     {
+        if (IsClosedForPipeline())
+            throw new DomainException("Despesa encerrada (cancelada ou rejeitada) não aceita alterações de pipeline.");
+
         if (ProcessingStatus == to && to != ExpenseProcessingStatus.Failed)
             return;
 
@@ -280,6 +294,7 @@ public sealed class Expense : IAuditableEntity
     public void RetryProcessingPipeline()
     {
         EnsureMutable();
+        EnsureApprovalWorkflowOpen();
         if (ApprovalStatus == ExpenseApprovalStatus.Approved)
             throw new DomainException("Não é possível reiniciar a pipeline de uma despesa já aprovada.");
         if (ProcessingStatus != ExpenseProcessingStatus.Failed)
@@ -337,6 +352,9 @@ public sealed class Expense : IAuditableEntity
 
     private void RefreshSettlementFromPayments()
     {
+        if (ApprovalStatus is ExpenseApprovalStatus.Cancelled or ExpenseApprovalStatus.Rejected)
+            return;
+
         var paid = TotalPaid;
         if (paid <= 0.001m)
             SettlementStatus = ExpenseSettlementStatus.Unpaid;
@@ -391,6 +409,18 @@ public sealed class Expense : IAuditableEntity
     {
         if (DeletedAt.HasValue)
             throw new DomainException("Despesa excluída não pode ser modificada.");
+    }
+
+    /// <summary>Cancelada ou rejeitada — bloqueia mutações de aprovação/pipeline.</summary>
+    public bool IsClosedForPipeline() =>
+        ApprovalStatus is ExpenseApprovalStatus.Cancelled or ExpenseApprovalStatus.Rejected;
+
+    private void EnsureApprovalWorkflowOpen()
+    {
+        if (ApprovalStatus is ExpenseApprovalStatus.Cancelled)
+            throw new DomainException("Despesa cancelada não pode ser alterada.");
+        if (ApprovalStatus is ExpenseApprovalStatus.Rejected)
+            throw new DomainException("Despesa rejeitada não pode ser alterada.");
     }
 
     /// <summary>Datas de documento (emissão/vencimento) chegam como Unspecified ou Local; PostgreSQL timestamptz exige UTC.</summary>

@@ -40,7 +40,7 @@ public sealed class ExpenseReportDocument : IDocument
     {
         container.Column(col =>
         {
-            col.Item().Text("SIMC-AG — Relatório Condominial").FontSize(18).Bold();
+            col.Item().Text("Econdomiza — Relatório Condominial").FontSize(18).Bold();
             col.Item().Text($"Tenant: {_data.TenantId}");
             col.Item().Text($"Período ({_data.PeriodLabel}): {_data.From:dd/MM/yyyy} → {_data.To:dd/MM/yyyy}");
             col.Item().Text($"Gerado em: {DateTime.UtcNow:dd/MM/yyyy HH:mm} UTC");

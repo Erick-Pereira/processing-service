@@ -27,7 +27,9 @@ public sealed class ExpenseRepository : IExpenseRepository
             .FirstOrDefaultAsync(e => e.Id == id, ct);
 
     public Task<Expense?> GetByRawDocumentIdAsync(Guid rawDocumentId, CancellationToken ct = default) =>
-        _db.Expenses.FirstOrDefaultAsync(e => e.RawDocumentId == rawDocumentId, ct);
+        _db.Expenses
+            .Include(e => e.Items)
+            .FirstOrDefaultAsync(e => e.RawDocumentId == rawDocumentId, ct);
 
     public async Task<(IReadOnlyList<Expense> Items, int Total)> ListAsync(
         ExpenseStatus? legacyStatus,
@@ -61,7 +63,8 @@ public sealed class ExpenseRepository : IExpenseRepository
             ? filtered.Include(e => e.Payments)
             : filtered;
 
-        var items = await page.OrderByDescending(e => e.IssueDate)
+        var items = await page.OrderByDescending(e => e.CreatedAt)
+            .ThenByDescending(e => e.IssueDate)
             .Skip(skip).Take(take)
             .ToListAsync(ct);
         return (items, total);

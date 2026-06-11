@@ -49,6 +49,8 @@ public class ExpenseListItemDto
 
     public string Currency { get; set; } = "BRL";
     public decimal TotalAmount { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }
 
 public sealed class ExpenseDetailDto : ExpenseListItemDto
@@ -68,6 +70,10 @@ public sealed class ExpenseDetailDto : ExpenseListItemDto
         Array.Empty<ExpenseOperationalTimelineEntryDto>();
 
     public ExpenseGovernanceDto? Governance { get; set; }
+
+    /// <summary>Análises de preço/benchmark extraídas da auditoria (PriceAnalyzed).</summary>
+    public IReadOnlyList<ExpensePriceAnalysisDto> PriceAnalyses { get; set; } =
+        Array.Empty<ExpensePriceAnalysisDto>();
 }
 
 public sealed class ExpenseOperationalTimelineEntryDto
@@ -109,6 +115,66 @@ public sealed class ExpenseAllowedActionsDto
     public bool RetryProcessing { get; set; }
     public bool RegisterPayment { get; set; }
     public bool RefundPayment { get; set; }
+
+    /// <summary>Motivos quando a ação correspondente está desabilitada (chaves camelCase).</summary>
+    public IReadOnlyDictionary<string, string> DisabledReasons { get; set; } =
+        new Dictionary<string, string>();
+}
+
+public sealed class ExpensePriceAnalysisDto
+{
+    public string ProductId { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public decimal LastPrice { get; set; }
+    public int? Quantity { get; set; }
+    public decimal? LineTotal { get; set; }
+    public decimal MarketAverage { get; set; }
+    public decimal HistoricalAverage { get; set; }
+    public decimal DeviationPercentage { get; set; }
+    public string Severity { get; set; } = string.Empty;
+    public DateTime AnalyzedAt { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string MarketSource { get; set; } = string.Empty;
+    public string MarketBenchmarkKind { get; set; } = string.Empty;
+    public string MarketBenchmarkStatus { get; set; } = string.Empty;
+    public string MarketConfidence { get; set; } = string.Empty;
+    public int? MarketSampleCount { get; set; }
+    public decimal? MarketRelativeSpread { get; set; }
+    public string MarketSearchQuery { get; set; } = string.Empty;
+    public decimal? MarketDocumentAnchorPrice { get; set; }
+    public IReadOnlyList<ExpenseMarketEvidenceDto> MarketEvidence { get; set; } =
+        Array.Empty<ExpenseMarketEvidenceDto>();
+    public IReadOnlyList<ExpenseMarketReferenceLinkDto> MarketReferenceLinks { get; set; } =
+        Array.Empty<ExpenseMarketReferenceLinkDto>();
+    public IReadOnlyList<ExpenseMarketPriceSampleDto> MarketSamples { get; set; } =
+        Array.Empty<ExpenseMarketPriceSampleDto>();
+    public decimal? NfUnitPrice { get; set; }
+    public int? NfQuantity { get; set; }
+    public decimal? NfLineTotal { get; set; }
+    public bool PriceAuditCorrected { get; set; }
+}
+
+public sealed class ExpenseMarketPriceSampleDto
+{
+    public string Label { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+    public decimal? PriceBrl { get; set; }
+    public string? Provider { get; set; }
+}
+
+public sealed class ExpenseMarketReferenceLinkDto
+{
+    public string Label { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+}
+
+public sealed class ExpenseMarketEvidenceDto
+{
+    public string Scope { get; set; } = string.Empty;
+    public string Phase { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public string? Detail { get; set; }
 }
 
 public sealed class ExpenseItemDto
