@@ -103,7 +103,7 @@ WITH scheduled AS (
     FROM expenses e
     WHERE e.tenant_id = @TenantId
       AND e.deleted_at IS NULL
-      AND e.approval_status NOT IN (3, 4)
+      AND e.approval_status NOT IN ('Rejected', 'Cancelled')
       AND e.due_date IS NOT NULL
       AND e.due_date BETWEEN @From AND @To
     GROUP BY 1, 2
@@ -159,7 +159,7 @@ WITH paid AS (
 )
 SELECT COALESCE(SUM(
     CASE
-        WHEN e.approval_status IN (3, 4) THEN 0
+        WHEN e.approval_status IN ('Rejected', 'Cancelled') THEN 0
         ELSE GREATEST(e.total_amount - COALESCE(paid.amount_paid, 0), 0)
     END
 ), 0)

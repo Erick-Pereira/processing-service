@@ -34,8 +34,8 @@ namespace Simcag.ProcessingService.Infrastructure.Migrations
                     COALESCE(SUM(p.amount_paid), 0)                            AS total_paid,
                     COALESCE(SUM(
                         CASE
-                            WHEN e.approval_status IN (3, 4) THEN 0
-                            ELSE e.total_amount - COALESCE(p.amount_paid, 0)
+                            WHEN e.approval_status IN ('Rejected', 'Cancelled') THEN 0
+                            ELSE GREATEST(e.total_amount - COALESCE(p.amount_paid, 0), 0)
                         END
                     ), 0)                                                      AS outstanding
                 FROM expenses e
